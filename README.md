@@ -6,11 +6,13 @@ One Python script (standard library only) plus one HTML template. No build step,
 ## Features
 
 - **Index** – stats, tag cloud, most connected / recently modified notes, orphans, unresolved links, sortable A–Z table
-- **Graph** – force-directed canvas: pan, zoom, drag, hover highlight, click to open, focus on a note (1–3 hops), unresolved links as ghost nodes
+- **Graph** – force-directed canvas: pan, zoom, drag, hover highlight, click to open, focus on a note (1–3 hops), colour by cluster or folder, filter by tag, spread slider, unresolved links as ghost nodes
 - **Search** – folder tree plus full-text search with snippets; click a tag to filter
 - **Notes** – rendered markdown (headings, lists, tasks, tables, code, callouts, highlights, tags), backlinks and outgoing links
 - **Navigation** – both `[[wikilinks]]` (with aliases and `#headings`) and standard `[text](path/note.md)` links, relative or vault-root
 - **Table of contents** – clickable per-note TOC that tracks your scroll position
+- **Theme** – glass-style UI with a light/dark toggle (follows the system by default, choice is remembered)
+- **Large vaults** (server mode) – incremental index that re-reads only changed files; search runs server-side
 - **Editing** (server mode) – create, edit, rename and delete notes with a split markdown editor and live preview
 
 ## Usage
@@ -47,7 +49,7 @@ It has no authentication, so do not expose it on a network.
 ## Notes
 
 - Folders starting with `.` (e.g. `.obsidian`, `.trash`) are ignored.
-- Images and other attachments are not rendered or indexed.
+- Attachments (images, PDF, audio, video) are detected and resolved by the index; the file type list is `MEDIA_EXT` in `obsidian_explorer.py`.
 - `explorer.html` embeds your vault's content; it is gitignored by default, so do not commit or share it unintentionally.
 
 ## Files
