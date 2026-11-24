@@ -64,6 +64,11 @@ def parse_frontmatter(text):
     return fm, text[m.end():]
 
 
+def note_aliases(p) -> list:
+    v = p["props"].get("aliases") or p["props"].get("alias") or []
+    return [str(a) for a in (v if isinstance(v, list) else [v]) if str(a).strip()]
+
+
 def parse_note(rel: str, path: str, mtime_ns: int, text: str) -> dict:
     """Parse one note. Link *targets* are extracted here; resolving them needs the whole vault (see VaultIndex)."""
     nid = rel[:-3]
@@ -171,6 +176,9 @@ class VaultIndex:
             parts = p["id"].split("/")
             for i in range(len(parts)):
                 lookup.setdefault("/".join(parts[i:]).lower(), p["id"])
+        for p in sorted(parsed, key=lambda p: p["id"]):  # aliases come last: real note names win
+            for a in note_aliases(p):
+                lookup.setdefault(a.lower(), p["id"])
         unresolved, notes = {}, []
         for p in sorted(parsed, key=lambda p: p["id"]):
             links, seen = [], set()
@@ -216,19 +224,35 @@ class VaultIndex:
         self.build()
         return {i: self.notes[i]["content"] for i in ids if i in self.notes}
 
-    def search(self, q, limit=300):
+    def search(self, q, limit=300, tag=""):
+        """Ranked search: name > alias > tag > body. `tag` restricts to notes carrying that tag."""
         self.build()
-        ql, out = q.lower().strip(), []
-        if not ql:
+        ql, tag, out = q.lower().strip(), tag.lower().strip().lstrip("#"), []
+        if not ql and not tag:
             return out
         for nid, p in self.notes.items():
-            i = p["lc"].find(ql)
-            if i >= 0:
-                c = p["content"]
-                out.append({"id": nid, "snippet": re.sub(r"\s+", " ", c[max(0, i - 40):i + 80])})
-                if len(out) >= limit:
-                    break
-        return out
+            tags = [t.lower() for t in p["tags"]]
+            if tag and tag not in tags:
+                continue
+            c, score, i = p["content"], 0, p["lc"].find(ql) if ql else -1
+            if ql:
+                title = p["title"].lower()
+                if title == ql:
+                    score = 120
+                elif ql in nid.lower():
+                    score = 100
+                elif any(ql in a.lower() for a in note_aliases(p)):
+                    score = 80
+                elif any(ql in t for t in tags):
+                    score = 60
+                elif i >= 0:
+                    score = 10
+                if not score:
+                    continue
+            snip = c[max(0, i - 40):i + 80] if i >= 0 else c[:120]
+            out.append({"id": nid, "snippet": re.sub(r"\s+", " ", snip), "score": score})
+        out.sort(key=lambda r: (-r["score"], r["id"]))
+        return out[:limit]
 
 
 def build(vault: Path, with_content: bool = True) -> dict:
@@ -297,6 +321,70 @@ def rewrite_links(vault: Path, old_id: str, new_id: str, lookup: dict) -> int:
     return changed
 
 
+class Conflict(Exception):
+    """The note changed on disk since the caller read it."""
+
+
+def read_note(vault: Path, nid: str) -> dict:
+    p = note_path(vault, nid)
+    return {"raw": p.read_text(encoding="utf-8", errors="replace"), "mtime": p.stat().st_mtime_ns}
+
+
+def save_note(vault: Path, idx: "VaultIndex", nid: str, raw: str, mtime=None, append=False) -> dict:
+    p = note_path(vault, nid)
+    if not p.is_file():
+        raise FileNotFoundError
+    if mtime and p.stat().st_mtime_ns != mtime:
+        raise Conflict("file changed on disk since you opened it")
+    if append:
+        old = p.read_bytes().decode("utf-8", errors="replace")
+        raw = old + ("" if not old or old.endswith("\n") else "\n") + raw
+    p.write_bytes(raw.encode("utf-8"))
+    idx.invalidate()
+    return {"ok": True, "mtime": p.stat().st_mtime_ns}
+
+
+def create_note(vault: Path, idx: "VaultIndex", nid: str, raw: str) -> dict:
+    p = note_path(vault, nid)
+    if p.exists():
+        raise ValueError("a note with that name already exists")
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_bytes(raw.encode("utf-8"))
+    idx.invalidate()
+    return {"ok": True, "mtime": p.stat().st_mtime_ns}
+
+
+def rename_note(vault: Path, idx: "VaultIndex", nid: str, new: str) -> dict:
+    import os
+    src, dst = note_path(vault, nid), note_path(vault, new)
+    if not src.is_file():
+        raise FileNotFoundError
+    if dst.exists() and dst != src:
+        raise ValueError("target already exists")
+    old_lookup = idx.build()["lookup"]
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    os.replace(src, dst)
+    n = rewrite_links(vault, nid.strip("/").removesuffix(".md"), new.strip("/").removesuffix(".md"), old_lookup)
+    idx.invalidate()
+    return {"ok": True, "updated": n}
+
+
+def trash_note(vault: Path, idx: "VaultIndex", nid: str) -> dict:
+    """Move to <vault>/.trash (recoverable)."""
+    import time
+    p = note_path(vault, nid)
+    if not p.is_file():
+        raise FileNotFoundError
+    trash = vault / ".trash"
+    trash.mkdir(exist_ok=True)
+    dst = trash / p.name
+    if dst.exists():
+        dst = trash / f"{p.stem}-{int(time.time())}{p.suffix}"
+    shutil.move(str(p), str(dst))
+    idx.invalidate()
+    return {"ok": True, "trashed": dst.name}
+
+
 def page(vault: Path, live: bool, index: "VaultIndex | None" = None) -> str:
     tpl = (Path(__file__).parent / "explorer_template.html").read_text(encoding="utf-8")
     raw = index.json() if index else json.dumps(build(vault), ensure_ascii=False)
@@ -355,6 +443,8 @@ def serve(vault: Path, port: int, open_browser: bool):
             try:
                 url = urlparse(self.path)
                 fn(url.path, {k: v[0] for k, v in parse_qs(url.query).items()})
+            except Conflict as e:
+                self.send(409, {"error": str(e)})
             except ValueError as e:
                 self.send(400, {"error": str(e)})
             except FileNotFoundError:
@@ -369,7 +459,7 @@ def serve(vault: Path, port: int, open_browser: bool):
                 elif path == "/api/data":
                     self.send(200, idx.json().encode("utf-8"))
                 elif path == "/api/search":
-                    self.send(200, idx.search(q.get("q", "")))
+                    self.send(200, idx.search(q.get("q", ""), tag=q.get("tag", "")))
                 elif path.startswith("/vault/"):
                     rel = unquote(path[len("/vault/"):])
                     segs = rel.split("/")
@@ -380,8 +470,7 @@ def serve(vault: Path, port: int, open_browser: bool):
                     import mimetypes
                     self.send(200, f.read_bytes(), (mimetypes.guess_type(f.name)[0] or "application/octet-stream"))
                 elif path == "/api/note":
-                    p = note_path(vault, q.get("id", ""))
-                    self.send(200, {"raw": p.read_text(encoding="utf-8", errors="replace"), "mtime": p.stat().st_mtime_ns})
+                    self.send(200, read_note(vault, q.get("id", "")))
                 else:
                     self.send(404, {"error": "not found"})
             self.dispatch(go, False)
@@ -389,15 +478,7 @@ def serve(vault: Path, port: int, open_browser: bool):
         def do_PUT(self):  # save existing
             def go(path, q):
                 d = self.body()
-                p = note_path(vault, d.get("id", ""))
-                if not p.is_file():
-                    raise FileNotFoundError
-                if d.get("mtime") and p.stat().st_mtime_ns != d["mtime"]:
-                    self.send(409, {"error": "file changed on disk since you opened it"})
-                    return
-                p.write_bytes(d.get("raw", "").encode("utf-8"))
-                idx.invalidate()
-                self.send(200, {"ok": True, "mtime": p.stat().st_mtime_ns})
+                self.send(200, save_note(vault, idx, d.get("id", ""), d.get("raw", ""), d.get("mtime")))
             self.dispatch(go, True)
 
         def do_POST(self):  # create / rename
@@ -409,42 +490,16 @@ def serve(vault: Path, port: int, open_browser: bool):
                         raise ValueError("bad ids")
                     self.send(200, idx.contents([str(i) for i in ids]))
                 elif path == "/api/note":
-                    p = note_path(vault, d.get("id", ""))
-                    if p.exists():
-                        raise ValueError("a note with that name already exists")
-                    p.parent.mkdir(parents=True, exist_ok=True)
-                    p.write_bytes(d.get("raw", "").encode("utf-8"))
-                    idx.invalidate()
-                    self.send(200, {"ok": True, "mtime": p.stat().st_mtime_ns})
+                    self.send(200, create_note(vault, idx, d.get("id", ""), d.get("raw", "")))
                 elif path == "/api/rename":
-                    src, dst = note_path(vault, d.get("id", "")), note_path(vault, d.get("new", ""))
-                    if not src.is_file():
-                        raise FileNotFoundError
-                    if dst.exists() and dst != src:
-                        raise ValueError("target already exists")
-                    old_lookup = idx.build()["lookup"]
-                    dst.parent.mkdir(parents=True, exist_ok=True)
-                    os.replace(src, dst)
-                    n = rewrite_links(vault, d["id"].strip("/").removesuffix(".md"), d["new"].strip("/").removesuffix(".md"), old_lookup)
-                    idx.invalidate()
-                    self.send(200, {"ok": True, "updated": n})
+                    self.send(200, rename_note(vault, idx, d.get("id", ""), d.get("new", "")))
                 else:
                     self.send(404, {"error": "not found"})
             self.dispatch(go, True)
 
         def do_DELETE(self):  # move to <vault>/.trash (recoverable)
             def go(path, q):
-                p = note_path(vault, q.get("id", ""))
-                if not p.is_file():
-                    raise FileNotFoundError
-                trash = vault / ".trash"
-                trash.mkdir(exist_ok=True)
-                dst = trash / p.name
-                if dst.exists():
-                    dst = trash / f"{p.stem}-{int(time.time())}{p.suffix}"
-                shutil.move(str(p), str(dst))
-                idx.invalidate()
-                self.send(200, {"ok": True, "trashed": dst.name})
+                self.send(200, trash_note(vault, idx, q.get("id", "")))
             self.dispatch(go, True)
 
     srv = ThreadingHTTPServer(("127.0.0.1", port), H)
@@ -458,9 +513,132 @@ def serve(vault: Path, port: int, open_browser: bool):
         pass
 
 
+def _frontmatter(tags, aliases) -> str:
+    lines = ["---"]
+    for key, vals in (("tags", tags), ("aliases", aliases)):
+        if vals:
+            lines += [f"{key}:"] + [f"  - {v}" for v in vals]
+    return "\n".join(lines + ["---", ""])
+
+
+def mcp_tools(vault: Path, idx: "VaultIndex") -> dict:
+    """name -> (description, JSON-schema properties, required, handler). Handlers return JSON-able data."""
+    S, A = {"type": "string"}, {"type": "array", "items": {"type": "string"}}
+
+    def search(a):
+        return idx.search(a.get("query", ""), int(a.get("limit", 20)), a.get("tag", ""))
+
+    def read(a):
+        return read_note(vault, a["id"])["raw"]
+
+    def write(a):
+        nid, content, mode = a["id"], a.get("content", ""), a.get("mode", "append")
+        if mode not in ("append", "overwrite", "create"):
+            raise ValueError("mode must be append, overwrite or create")
+        exists = note_path(vault, nid).is_file()
+        if exists and mode == "create":
+            raise ValueError("a note with that name already exists")
+        if exists:
+            return save_note(vault, idx, nid, content, append=(mode == "append"))
+        if (a.get("tags") or a.get("aliases")) and not content.startswith("---"):
+            content = _frontmatter(a.get("tags"), a.get("aliases")) + content
+        return create_note(vault, idx, nid, content)
+
+    def index(a):
+        res = idx.build()
+        tags, linked = {}, set()
+        for n in res["notes"]:
+            for t in n["tags"]:
+                tags[t] = tags.get(t, 0) + 1
+            if n["links"]:
+                linked.add(n["id"])
+                linked.update(n["links"])
+        return {"notes": [{k: n[k] for k in ("id", "tags", "mtime")} for n in res["notes"]],
+                "tags": dict(sorted(tags.items(), key=lambda kv: -kv[1])),
+                "orphans": [n["id"] for n in res["notes"] if n["id"] not in linked],
+                "unresolved": res["unresolved"]}
+
+    def backlinks(a):
+        nid = a["id"].strip("/").removesuffix(".md")
+        return [n["id"] for n in idx.build()["notes"] if nid in n["links"]]
+
+    def rename(a):
+        return rename_note(vault, idx, a["id"], a["new"])
+
+    def delete(a):
+        return trash_note(vault, idx, a["id"])
+
+    return {
+        "search": ("Ranked search (name > alias > tag > body). Empty query with tag lists that tag's notes.",
+                   {"query": S, "tag": S, "limit": {"type": "integer"}}, [], search),
+        "read": ("Read a note's raw markdown by id, e.g. 'Folder/Name'.", {"id": S}, ["id"], read),
+        "write": ("Create a note, or append to / overwrite an existing one. mode: append (default), overwrite, create. "
+                  "tags/aliases become frontmatter on new notes.",
+                  {"id": S, "content": S, "mode": S, "tags": A, "aliases": A}, ["id", "content"], write),
+        "index": ("All note ids with tags, tag counts, orphan notes and unresolved links.", {}, [], index),
+        "backlinks": ("Ids of notes that link to the given note.", {"id": S}, ["id"], backlinks),
+        "rename": ("Rename/move a note and repoint wikilinks and markdown links.", {"id": S, "new": S}, ["id", "new"], rename),
+        "delete": ("Delete a note (moved to .trash, recoverable).", {"id": S}, ["id"], delete),
+    }
+
+
+def run_mcp(vault: Path):
+    """Minimal MCP server over stdio (newline-delimited JSON-RPC 2.0)."""
+    idx = VaultIndex(vault)
+    tools = mcp_tools(vault, idx)
+    sys.stdin.reconfigure(encoding="utf-8")
+    sys.stdout.reconfigure(encoding="utf-8")
+
+    def reply(id_, result=None, error=None):
+        msg = {"jsonrpc": "2.0", "id": id_}
+        msg["error" if error else "result"] = error or result
+        sys.stdout.write(json.dumps(msg, ensure_ascii=False) + "\n")
+        sys.stdout.flush()
+
+    for line in sys.stdin:
+        if not line.strip():
+            continue
+        try:
+            req = json.loads(line)
+            method, id_, params = req.get("method"), req.get("id"), req.get("params") or {}
+        except (ValueError, AttributeError):
+            reply(None, error={"code": -32700, "message": "parse error"})
+            continue
+        if id_ is None:  # notification (e.g. notifications/initialized): no reply
+            continue
+        if method == "initialize":
+            reply(id_, {"protocolVersion": params.get("protocolVersion", "2025-03-26"),
+                        "capabilities": {"tools": {}}, "serverInfo": {"name": "fastobsidian", "version": "0.1"}})
+        elif method == "ping":
+            reply(id_, {})
+        elif method == "tools/list":
+            reply(id_, {"tools": [{"name": n, "description": d, "inputSchema": {"type": "object", "properties": p, "required": r}}
+                                  for n, (d, p, r, _) in tools.items()]})
+        elif method == "tools/call":
+            tool = tools.get(params.get("name"))
+            if not tool:
+                reply(id_, error={"code": -32602, "message": f"unknown tool: {params.get('name')}"})
+                continue
+            try:
+                out = tool[3](params.get("arguments") or {})
+                text, bad = (out if isinstance(out, str) else json.dumps(out, ensure_ascii=False)), False
+            except KeyError as e:
+                text, bad = f"missing argument: {e}", True
+            except FileNotFoundError:
+                text, bad = "note not found", True
+            except (ValueError, Conflict) as e:
+                text, bad = str(e), True
+            except Exception as e:  # noqa: BLE001
+                text, bad = f"{type(e).__name__}: {e}", True
+            reply(id_, {"content": [{"type": "text", "text": text}], "isError": bad})
+        else:
+            reply(id_, error={"code": -32601, "message": f"method not found: {method}"})
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--serve", action="store_true", help="run local server with note editing (create/edit/rename/delete)")
+    ap.add_argument("--mcp", action="store_true", help="run an MCP server on stdio (search/read/write/index/backlinks/rename/delete)")
     ap.add_argument("--port", type=int, default=8765)
     ap.add_argument("vault", nargs="?", default=".", help="vault directory (default: .)")
     ap.add_argument("-o", "--out", default="explorer.html")
@@ -470,6 +648,8 @@ def main():
     vault = Path(a.vault).expanduser().resolve()
     if not vault.is_dir():
         sys.exit(f"not a directory: {vault}")
+    if a.mcp:
+        return run_mcp(vault)
     if a.serve:
         return serve(vault, a.port, a.open)
     out = Path(a.out).resolve()

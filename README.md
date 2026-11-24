@@ -30,6 +30,17 @@ python obsidian_explorer.py /path/to/vault -o explorer.html --open
 Options: `--port N` (default 8765), `-o FILE` (static output), `--open` (launch browser).
 Try it with the bundled `sample-vault/`.
 
+## MCP server (for AI agents)
+
+`python obsidian_explorer.py /path/to/vault --mcp` speaks MCP over stdio. Tools: `search` (ranked: name > alias > tag > body, optional `tag`),
+`read`, `write` (`append` default, `overwrite`, `create`; `tags`/`aliases` become frontmatter on new notes), `index`, `backlinks`, `rename`, `delete` (to `.trash`).
+
+```json
+{ "mcpServers": { "vault": { "command": "python", "args": ["/path/obsidian_explorer.py", "/path/to/vault", "--mcp"] } } }
+```
+
+Frontmatter `aliases` also resolve `[[alias]]` links. Run tests with `python -m unittest discover -s tests`.
+
 ## Editing
 
 In live mode each note has **edit**, **rename** and **delete** buttons, and the sidebar has **+ New note**
