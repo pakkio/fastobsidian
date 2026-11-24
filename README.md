@@ -10,6 +10,7 @@ One Python script (standard library only) plus one HTML template. No build step,
 - **Search** – folder tree plus full-text search with snippets, ranked by name, alias, tag, then body; click a tag to filter
 - **Notes** – rendered markdown (headings, lists, tasks, tables, code, callouts, highlights, tags), backlinks and outgoing links
 - **Navigation** – both `[[wikilinks]]` (with `#headings`, `|display` text, and frontmatter `aliases` as link targets) and standard `[text](path/note.md)` links, relative or vault-root
+- **Focus mode** – Ctrl+F on a note hides the columns and goes full screen; press again (or Esc) to restore them
 - **Table of contents** – clickable per-note TOC that tracks your scroll position
 - **Theme** – glass-style UI with a light/dark toggle (follows the system by default, choice is remembered)
 - **Large vaults** (server mode) – incremental index that re-reads only changed files; search runs server-side

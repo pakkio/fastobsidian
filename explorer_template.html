@@ -29,6 +29,10 @@ a{color:var(--acc);text-decoration:none;transition:color .15s}a:hover{text-decor
 ::selection{background:var(--acc);color:#fff}
 #app{display:grid;grid-template-columns:292px 1fr;height:100vh}
 
+body.focus #app{grid-template-columns:1fr}
+body.focus #side,body.focus nav{display:none}
+body.focus .pad.note{max-width:none;width:100%;margin:0;padding-left:max(36px,6vw);padding-right:max(36px,6vw)}
+
 /* sidebar */
 #side{background:var(--side);backdrop-filter:blur(22px) saturate(1.4);-webkit-backdrop-filter:blur(22px) saturate(1.4);border-right:1px solid var(--line);display:flex;flex-direction:column;min-height:0}
 #side header{padding:16px 14px 12px}
@@ -1082,6 +1086,19 @@ if (LIVE) {
    ['block', () => wrap('```\n', '\n```', '')], ['#tag', () => wrap('#', '', 'tag')]
   ].forEach(([l, f]) => { const b = el('button', '', l); b.type = 'button'; b.onclick = f; $('#tb').appendChild(b); });
 }
+
+/* ---------- focus mode: Ctrl+F shows the current note full screen, again restores the columns ---------- */
+function setFocus(on) {
+  document.body.classList.toggle('focus', on);
+  try { if (on && !document.fullscreenElement) document.documentElement.requestFullscreen().catch(() => {}); else if (!on && document.fullscreenElement) document.exitFullscreen(); } catch (e) { /* unsupported */ }
+}
+document.addEventListener('keydown', e => {
+  const noteOpen = $('#v-note').classList.contains('active'), on = document.body.classList.contains('focus');
+  if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'f' && (noteOpen || on)) { e.preventDefault(); setFocus(!on); }
+  else if (e.key === 'Escape' && on) setFocus(false);
+});
+document.addEventListener('fullscreenchange', () => { if (!document.fullscreenElement) document.body.classList.remove('focus'); });
+{ const sv = showView; showView = v => { if (v !== 'note') setFocus(false); sv(v); }; }
 
 /* ---------- boot ---------- */
 $('#vname').textContent = D.vault;
