@@ -44,7 +44,7 @@ Frontmatter `aliases` also resolve `[[alias]]` links. Run tests with `python -m 
 ## Editing
 
 In live mode each note has **edit**, **rename** and **delete** buttons, and the sidebar has **+ New note**
-(path like `Folder/Name`). Ctrl+S saves; a toolbar inserts bold, italic, headings, lists, tasks, `[[links]]`, code and tags.
+(path like `Folder/Name`). Ctrl+S saves; Ctrl+O switches to another vault (asks for a folder path); a toolbar inserts bold, italic, headings, lists, tasks, `[[links]]`, code and tags.
 
 - **Delete is recoverable**: files move to `<vault>/.trash/`.
 - **Rename updates links**: `[[wikilinks]]` in other notes are repointed. Markdown `[text](x.md)` links are not rewritten.

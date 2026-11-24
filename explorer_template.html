@@ -1003,7 +1003,23 @@ async function renameNote(id) {
   try { await api('POST', '/api/rename', { id, new: nn }); await reload(); location.hash = noteHref(nn.replace(/\.md$/i, '')); }
   catch (e) { alert(e.message); }
 }
+async function changeVault() {
+  if (ED.dirty && !confirm('Discard unsaved changes?')) return;
+  let cur = '';
+  try { cur = (await api('GET', '/api/vault')).path; } catch (e) { /* ignore */ }
+  const p = prompt('Open vault (folder path):', cur);
+  if (!p || p.trim() === cur) return;
+  try {
+    await api('POST', '/api/vault', { path: p });
+    ED.dirty = false; curNote = null; $('#tnote').style.display = 'none';
+    await reload();
+    $('#vname').textContent = D.vault; document.title = D.vault + ' · Vault Explorer';
+    location.hash = 'index';
+  } catch (e) { alert(e.message); }
+}
 if (LIVE) {
+  document.addEventListener('keydown', e => { if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'o') { e.preventDefault(); changeVault(); } });
+  $('#vname').title = 'Ctrl+O: open another vault';
   const ta = $('#ta');
   $('#newbtn').style.display = ''; $('#newbtn').onclick = () => location.hash = 'new';
   const touch = () => { ED.dirty = true; preview(); };

@@ -404,6 +404,14 @@ def serve(vault: Path, port: int, open_browser: bool):
     print(f"indexed {n} notes in {time.time() - t0:.1f}s")
     allowed_hosts = {f"127.0.0.1:{port}", f"localhost:{port}"}
 
+    def switch(path):
+        nonlocal vault, idx
+        new = Path(path).expanduser().resolve()
+        if not new.is_dir():
+            raise ValueError(f"not a directory: {new}")
+        vault, idx = new, VaultIndex(new)
+        idx.build()
+
     class H(BaseHTTPRequestHandler):
         def log_message(self, *a):
             pass
@@ -458,6 +466,8 @@ def serve(vault: Path, port: int, open_browser: bool):
                     self.send(200, page(vault, True, idx), "text/html")
                 elif path == "/api/data":
                     self.send(200, idx.json().encode("utf-8"))
+                elif path == "/api/vault":
+                    self.send(200, {"path": str(vault)})
                 elif path == "/api/search":
                     self.send(200, idx.search(q.get("q", ""), tag=q.get("tag", "")))
                 elif path.startswith("/vault/"):
@@ -491,6 +501,9 @@ def serve(vault: Path, port: int, open_browser: bool):
                     self.send(200, idx.contents([str(i) for i in ids]))
                 elif path == "/api/note":
                     self.send(200, create_note(vault, idx, d.get("id", ""), d.get("raw", "")))
+                elif path == "/api/vault":
+                    switch(str(d.get("path", "")).strip().strip('"'))
+                    self.send(200, {"ok": True, "path": str(vault)})
                 elif path == "/api/rename":
                     self.send(200, rename_note(vault, idx, d.get("id", ""), d.get("new", "")))
                 else:
