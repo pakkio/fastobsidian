@@ -7,13 +7,15 @@ One Python script (standard library only) plus one HTML template. No build step,
 
 - **Index** – stats, tag cloud, most connected / recently modified notes, orphans, unresolved links, sortable A–Z table
 - **Graph** – force-directed canvas: pan, zoom, drag, hover highlight, click to open, focus on a note (1–3 hops), colour by cluster or folder, filter by tag, spread slider, unresolved links as ghost nodes
-- **Search** – folder tree plus full-text search with snippets; click a tag to filter
+- **Search** – folder tree plus full-text search with snippets, ranked by name, alias, tag, then body; click a tag to filter
 - **Notes** – rendered markdown (headings, lists, tasks, tables, code, callouts, highlights, tags), backlinks and outgoing links
-- **Navigation** – both `[[wikilinks]]` (with aliases and `#headings`) and standard `[text](path/note.md)` links, relative or vault-root
+- **Navigation** – both `[[wikilinks]]` (with `#headings`, `|display` text, and frontmatter `aliases` as link targets) and standard `[text](path/note.md)` links, relative or vault-root
 - **Table of contents** – clickable per-note TOC that tracks your scroll position
 - **Theme** – glass-style UI with a light/dark toggle (follows the system by default, choice is remembered)
 - **Large vaults** (server mode) – incremental index that re-reads only changed files; search runs server-side
 - **Editing** (server mode) – create, edit, rename and delete notes with a split markdown editor and live preview
+- **Vault switching** (server mode) – Ctrl+O opens another vault without restarting
+- **MCP server** – `--mcp` exposes search, read, write/append, index, backlinks, rename and delete to AI agents over stdio
 
 ## Usage
 
@@ -27,7 +29,7 @@ python obsidian_explorer.py /path/to/vault --serve --open
 python obsidian_explorer.py /path/to/vault -o explorer.html --open
 ```
 
-Options: `--port N` (default 8765), `-o FILE` (static output), `--open` (launch browser).
+Options: `--port N` (default 8765), `-o FILE` (static output), `--open` (launch browser), `--mcp` (MCP server on stdio, see below).
 Try it with the bundled `sample-vault/`.
 
 ## MCP server (for AI agents)
