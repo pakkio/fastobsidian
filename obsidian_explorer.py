@@ -6,6 +6,7 @@ for an Obsidian vault.
 """
 import argparse
 import json
+import os
 import re
 import shutil
 import sys
@@ -22,6 +23,64 @@ FM = re.compile(r"---[ \t]*\r?\n(.*?)\r?\n---[ \t]*(?:\r?\n|$)", re.S)
 MEDIA_EXT = {"png", "jpg", "jpeg", "gif", "svg", "webp", "bmp", "pdf", "mp3", "mp4",
              "wav", "ogg", "webm", "mov", "m4a"}
 ASSET_EXT = MEDIA_EXT | {"canvas", "base"}
+# notes larger than this are left out of the index and refused by read/write: a huge .md must not eat all memory
+MAX_NOTE_BYTES = 32 * 1024 * 1024
+
+
+def _is_link(path) -> bool:
+    """True for a symlink, or a Windows junction (os.path.isjunction exists from Python 3.12)."""
+    isjunction = getattr(os.path, "isjunction", None)
+    return os.path.islink(path) or bool(isjunction and isjunction(path))
+
+
+def no_links(vault: Path, p: Path) -> Path:
+    """Raise ValueError if `p`, or any folder between the vault and `p`, is a symlink or junction.
+
+    Reads and writes never follow links, so a link inside the vault cannot redirect them to a file elsewhere."""
+    cur = vault
+    for part in p.relative_to(vault).parts:
+        cur = cur / part
+        if _is_link(cur):
+            raise ValueError(f"refusing to follow a symlink: {cur.relative_to(vault).as_posix()}")
+    return p
+
+
+def walk_vault(vault: Path):
+    """(md, media): md = sorted [(rel, path, mtime_ns, size)], media = [rel].
+
+    Skips dot-folders, symlinks/junctions (files and folders) and notes over MAX_NOTE_BYTES."""
+    md, media, stack = [], [], [(str(vault), "")]
+    while stack:
+        path, rel = stack.pop()
+        try:
+            it = os.scandir(path)
+        except OSError:
+            continue
+        with it:
+            for e in it:
+                if e.name.startswith("."):
+                    continue
+                r = f"{rel}/{e.name}" if rel else e.name
+                try:
+                    is_junction = getattr(e, "is_junction", None)
+                    if e.is_symlink() or (is_junction and is_junction()):
+                        continue
+                    if e.is_dir(follow_symlinks=False):
+                        stack.append((e.path, r))
+                        continue
+                    if not e.is_file(follow_symlinks=False):
+                        continue
+                    ext = e.name.rsplit(".", 1)[-1].lower() if "." in e.name else ""
+                    if ext == "md":
+                        st = e.stat(follow_symlinks=False)   # free on Windows (comes from the directory listing)
+                        if st.st_size <= MAX_NOTE_BYTES:
+                            md.append((r, e.path, st.st_mtime_ns, st.st_size))
+                    elif ext in MEDIA_EXT:
+                        media.append(r)
+                except OSError:
+                    continue
+    md.sort()
+    return md, media
 
 
 # [text](note.md#h) or [text](<my note.md#h>) -- images (![..]) excluded
@@ -83,6 +142,7 @@ def parse_note(rel: str, path: str, mtime_ns: int, text: str) -> dict:
     return {
         "id": nid, "title": nid.rsplit("/", 1)[-1], "folder": nid.rsplit("/", 1)[0] if "/" in nid else "",
         "content": content, "lc": content.lower(), "mtime": mtime_ns // 1_000_000_000,
+        "rev": str(mtime_ns),  # exact change marker for the browser's content cache (a string: ns overflow JS numbers)
         "words": len(re.findall(r"\w+", body)), "tags": sorted(tags),
         "props": {k: v for k, v in fm.items() if k not in ("tags", "tag")},
         "wiki": [t.strip() for _, t, _ in WIKI.findall(stripped) if t.strip()],
@@ -105,49 +165,21 @@ class VaultIndex:
         self.lock = threading.Lock()
         self.checked = 0.0       # last time the folder tree was walked
         self.stale = True
+        self.version = 0         # bumped every time the vault content changes (the watcher pushes it to browsers)
 
     def invalidate(self):
         """Call after writing through the server so the next build re-walks immediately."""
         self.stale = True
 
-    def _walk(self):
-        import os
-        md, media, stack = [], [], [(str(self.vault), "")]
-        while stack:
-            path, rel = stack.pop()
-            try:
-                it = os.scandir(path)
-            except OSError:
-                continue
-            with it:
-                for e in it:
-                    if e.name.startswith("."):
-                        continue
-                    r = f"{rel}/{e.name}" if rel else e.name
-                    try:
-                        if e.is_dir(follow_symlinks=False):
-                            stack.append((e.path, r))
-                            continue
-                        if not e.is_file():
-                            continue
-                    except OSError:
-                        continue
-                    ext = e.name.rsplit(".", 1)[-1].lower() if "." in e.name else ""
-                    if ext == "md":
-                        st = e.stat()   # free on Windows (comes from the directory listing)
-                        md.append((r, e.path, st.st_mtime_ns, st.st_size))
-                    elif ext in MEDIA_EXT:
-                        media.append(r)
-        md.sort()
-        return md, media
-
-    def build(self):
+    def build(self, force=False):
+        """Current index. Without `force`, a walk happens at most every MIN_RECHECK seconds (or after invalidate)."""
         import time
         with self.lock:
             # external edits (e.g. in Obsidian) are picked up within MIN_RECHECK seconds; our own writes invalidate
-            if self.result is not None and not self.stale and time.monotonic() - self.checked < self.MIN_RECHECK:
+            if (not force and self.result is not None and not self.stale
+                    and time.monotonic() - self.checked < self.MIN_RECHECK):
                 return self.result
-            md, media = self._walk()
+            md, media = walk_vault(self.vault)
             self.checked, self.stale = time.monotonic(), False
             sig = hash((tuple((r, m, s) for r, _, m, s in md), tuple(sorted(media))))
             if sig == self.sig and self.result is not None:
@@ -167,6 +199,7 @@ class VaultIndex:
             self.notes = {p["id"]: p for _, _, p in files.values()}
             self.result = self._resolve(media)
             self.sig = sig
+            self.version += 1
             return self.result
 
     def _resolve(self, media):
@@ -201,7 +234,7 @@ class VaultIndex:
                 ext_url = re.match(r"[a-z][a-z0-9+.-]*:", raw, re.I)
                 link(None if ext_url else resolve_md(raw, p["id"], lookup),
                      None if ext_url else unquote(raw).rsplit("/", 1)[-1][:-3])
-            notes.append({k: p[k] for k in ("id", "title", "folder", "mtime", "words", "tags", "props")} | {"links": links})
+            notes.append({k: p[k] for k in ("id", "title", "folder", "mtime", "rev", "words", "tags", "props")} | {"links": links})
         assets = {}
         for rel in sorted(media, key=lambda r: (r.count("/"), r)):
             parts = rel.split("/")
@@ -275,27 +308,24 @@ def note_path(vault: Path, nid: str) -> Path:
     segs = nid.split("/")
     if not nid or any(not s.strip() or s.startswith(".") or s.endswith(".") or BAD_CHARS.search(s) for s in segs):
         raise ValueError(f"invalid note name: {nid!r}")
-    p = (vault / (nid + ".md")).resolve()
-    if vault not in p.parents:
+    p = vault / (nid + ".md")
+    if vault not in p.resolve().parents:
         raise ValueError("path escapes the vault")
-    return p
+    return no_links(vault, p)
 
 
 def rewrite_links(vault: Path, old_id: str, new_id: str, lookup: dict) -> int:
     """After a rename, repoint [[old]] / [[folder/old]] wikilinks and [text](old.md) links.
 
-    `lookup` must be the note lookup from *before* the rename (to resolve markdown links)."""
-    import os
+    `lookup` must be the note lookup from *before* the rename (to resolve markdown links).
+    Only notes the index sees are touched: no dot-folders, no symlinks, nothing over MAX_NOTE_BYTES."""
     old_base, new_base = old_id.rsplit("/", 1)[-1], new_id.rsplit("/", 1)[-1]
     pairs = [(old_id, new_id)] + ([(old_base, new_base)] if old_base != new_base else [])
     changed = 0
-    for p in vault.rglob("*.md"):
-        rel = p.relative_to(vault)
-        if any(part.startswith(".") for part in rel.parts):
-            continue
+    for rel_s, path, _, _ in walk_vault(vault)[0]:
+        p, me_new = Path(path), rel_s[:-3]
         # a renamed note keeps its own relative links pointing at the old location, so use old id for resolution
-        me_old = old_id if rel.with_suffix("").as_posix() == new_id else rel.with_suffix("").as_posix()
-        me_new = rel.with_suffix("").as_posix()
+        me_old = old_id if me_new == new_id else me_new
         text = p.read_text(encoding="utf-8", errors="replace")
         new = text
         for old, rep in pairs:
@@ -325,8 +355,16 @@ class Conflict(Exception):
     """The note changed on disk since the caller read it."""
 
 
+def _check_size(p: Path, extra: int = 0):
+    if p.stat().st_size + extra > MAX_NOTE_BYTES:
+        raise ValueError(f"note is larger than {MAX_NOTE_BYTES >> 20} MiB")
+
+
 def read_note(vault: Path, nid: str) -> dict:
     p = note_path(vault, nid)
+    if not p.is_file():
+        raise FileNotFoundError
+    _check_size(p)
     return {"raw": p.read_text(encoding="utf-8", errors="replace"), "mtime": p.stat().st_mtime_ns}
 
 
@@ -336,7 +374,11 @@ def save_note(vault: Path, idx: "VaultIndex", nid: str, raw: str, mtime=None, ap
         raise FileNotFoundError
     if mtime and p.stat().st_mtime_ns != mtime:
         raise Conflict("file changed on disk since you opened it")
+    data = raw.encode("utf-8")
+    if len(data) > MAX_NOTE_BYTES:
+        raise ValueError(f"note is larger than {MAX_NOTE_BYTES >> 20} MiB")
     if append:
+        _check_size(p, len(data))
         old = p.read_bytes().decode("utf-8", errors="replace")
         raw = old + ("" if not old or old.endswith("\n") else "\n") + raw
     p.write_bytes(raw.encode("utf-8"))
@@ -346,8 +388,10 @@ def save_note(vault: Path, idx: "VaultIndex", nid: str, raw: str, mtime=None, ap
 
 def create_note(vault: Path, idx: "VaultIndex", nid: str, raw: str) -> dict:
     p = note_path(vault, nid)
-    if p.exists():
+    if p.exists() or p.is_symlink():
         raise ValueError("a note with that name already exists")
+    if len(raw.encode("utf-8")) > MAX_NOTE_BYTES:
+        raise ValueError(f"note is larger than {MAX_NOTE_BYTES >> 20} MiB")
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_bytes(raw.encode("utf-8"))
     idx.invalidate()
@@ -355,11 +399,10 @@ def create_note(vault: Path, idx: "VaultIndex", nid: str, raw: str) -> dict:
 
 
 def rename_note(vault: Path, idx: "VaultIndex", nid: str, new: str) -> dict:
-    import os
     src, dst = note_path(vault, nid), note_path(vault, new)
     if not src.is_file():
         raise FileNotFoundError
-    if dst.exists() and dst != src:
+    if (dst.exists() or dst.is_symlink()) and dst != src:
         raise ValueError("target already exists")
     old_lookup = idx.build()["lookup"]
     dst.parent.mkdir(parents=True, exist_ok=True)
@@ -375,7 +418,7 @@ def trash_note(vault: Path, idx: "VaultIndex", nid: str) -> dict:
     p = note_path(vault, nid)
     if not p.is_file():
         raise FileNotFoundError
-    trash = vault / ".trash"
+    trash = no_links(vault, vault / ".trash")
     trash.mkdir(exist_ok=True)
     dst = trash / p.name
     if dst.exists():
@@ -385,24 +428,98 @@ def trash_note(vault: Path, idx: "VaultIndex", nid: str) -> dict:
     return {"ok": True, "trashed": dst.name}
 
 
-def page(vault: Path, live: bool, index: "VaultIndex | None" = None) -> str:
+SAFE_NAME = re.compile(r"^[^/\\\x00-\x1f]+$")
+
+
+def obsidian_css(vault: Path) -> dict:
+    """The theme and CSS snippets enabled in <vault>/.obsidian/appearance.json.
+
+    Returns {"css": str, "mode": "dark" | "light" | None, "theme": str}. Missing files are skipped."""
+    base = vault / ".obsidian"
+    try:
+        app = json.loads(no_links(vault, base / "appearance.json").read_text(encoding="utf-8"))
+        if not isinstance(app, dict):
+            app = {}
+    except (OSError, ValueError):
+        app = {}
+
+    def read(p: Path):
+        try:
+            no_links(vault, p)
+            if p.is_file() and p.stat().st_size <= MAX_NOTE_BYTES:
+                return p.read_text(encoding="utf-8", errors="replace")
+        except (OSError, ValueError):
+            pass
+        return None
+
+    parts, theme = [], str(app.get("cssTheme") or "")
+    if theme and SAFE_NAME.match(theme) and theme not in (".", ".."):
+        for p in (base / "themes" / theme / "theme.css", base / "themes" / f"{theme}.css"):  # current / pre-1.0 layout
+            css = read(p)
+            if css is not None:
+                parts.append(f"/* theme: {theme} */\n{css}")
+                break
+    snippets = app.get("enabledCssSnippets") or []
+    for s in snippets if isinstance(snippets, list) else []:
+        if isinstance(s, str) and SAFE_NAME.match(s) and s not in (".", ".."):
+            css = read(base / "snippets" / f"{s}.css")
+            if css is not None:
+                parts.append(f"/* snippet: {s} */\n{css}")
+    mode = {"obsidian": "dark", "moonstone": "light"}.get(app.get("theme"))
+    return {"css": "\n".join(parts), "mode": mode, "theme": theme}
+
+
+PLACEHOLDER = re.compile(r"/\*__(\w+)__\*/(?:false|null)?")
+
+
+def page(vault: Path, live: bool, index: "VaultIndex | None" = None, theme: bool = False) -> str:
+    """Fill the template in one pass, so text inserted from the vault is never scanned for placeholders."""
     tpl = (Path(__file__).parent / "explorer_template.html").read_text(encoding="utf-8")
     raw = index.json() if index else json.dumps(build(vault), ensure_ascii=False)
-    payload = raw.replace("</", "<\\/")
-    return tpl.replace("/*__LIVE__*/false", "true" if live else "false").replace("/*__DATA__*/", payload)
+    obs = obsidian_css(vault) if theme else None
+    values = {
+        "LIVE": "true" if live else "false",
+        "DATA": raw.replace("</", "<\\/"),
+        "OBS": json.dumps({"mode": obs["mode"], "theme": obs["theme"]}).replace("</", "<\\/") if obs else "null",
+        "OBSCSS": re.sub(r"</(style)", r"<\\/\1", obs["css"], flags=re.I) if obs else "",
+    }
+    return PLACEHOLDER.sub(lambda m: values.get(m.group(1), m.group(0)), tpl)
 
 
-def serve(vault: Path, port: int, open_browser: bool):
+def make_server(vault: Path, port: int, theme: bool = False, watch: float = 1.0):
+    """Build (not start) the local server. `watch` = seconds between vault checks while a browser listens (0 = off)."""
     from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
     from urllib.parse import urlparse, parse_qs
-    import os
+    import threading
     import time
 
     idx = VaultIndex(vault)
     t0 = time.time()
     n = len(idx.build()["notes"])
     print(f"indexed {n} notes in {time.time() - t0:.1f}s")
-    allowed_hosts = {f"127.0.0.1:{port}", f"localhost:{port}"}
+    allowed_hosts = set()   # filled in once the port is known (port 0 = any free port)
+    events = threading.Condition()
+    state = {"v": 0, "clients": 0}
+
+    def watcher():
+        """Re-check the vault while at least one browser is listening on /api/events; announce every change."""
+        last = (id(idx), idx.version)
+        while True:
+            time.sleep(watch)
+            if not state["clients"]:
+                continue
+            cur = idx
+            try:
+                cur.build(force=True)
+            except Exception as e:  # noqa: BLE001 -- a bad file must not kill the watcher
+                print(f"watcher: {type(e).__name__}: {e}", file=sys.stderr)
+                continue
+            key = (id(cur), cur.version)
+            if key != last:
+                last = key
+                with events:
+                    state["v"] += 1
+                    events.notify_all()
 
     def switch(path):
         nonlocal vault, idx
@@ -445,6 +562,35 @@ def serve(vault: Path, port: int, open_browser: bool):
             n = int(self.headers.get("Content-Length") or 0)
             return json.loads(self.rfile.read(n) or b"{}")
 
+        def stream_events(self):
+            """Server-sent events: `hello` with the current version, then `change` whenever the vault changes."""
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            with events:
+                state["clients"] += 1
+                seen = state["v"]
+            try:
+                self.wfile.write(f"event: hello\ndata: {seen}\n\n".encode())
+                self.wfile.flush()
+                while True:
+                    with events:
+                        if state["v"] == seen:
+                            events.wait(15)
+                        v = state["v"]
+                    if v != seen:
+                        seen = v
+                        self.wfile.write(f"event: change\ndata: {v}\n\n".encode())
+                    else:
+                        self.wfile.write(b": ping\n\n")  # keeps proxies happy and detects closed tabs
+                    self.wfile.flush()
+            except OSError:  # browser tab closed
+                pass
+            finally:
+                with events:
+                    state["clients"] -= 1
+
         def dispatch(self, fn, write):
             if not self.guard(write):
                 return
@@ -463,7 +609,9 @@ def serve(vault: Path, port: int, open_browser: bool):
         def do_GET(self):
             def go(path, q):
                 if path == "/":
-                    self.send(200, page(vault, True, idx), "text/html")
+                    self.send(200, page(vault, True, idx, theme), "text/html")
+                elif path == "/api/events":
+                    self.stream_events()
                 elif path == "/api/data":
                     self.send(200, idx.json().encode("utf-8"))
                 elif path == "/api/vault":
@@ -473,10 +621,11 @@ def serve(vault: Path, port: int, open_browser: bool):
                 elif path.startswith("/vault/"):
                     rel = unquote(path[len("/vault/"):])
                     segs = rel.split("/")
-                    f = (vault / rel).resolve()
+                    f = vault / rel
                     if (any(not s or s.startswith(".") for s in segs) or f.suffix.lower()[1:] not in MEDIA_EXT
-                            or vault not in f.parents or not f.is_file()):
+                            or vault not in f.resolve().parents or not f.is_file()):
                         raise FileNotFoundError
+                    no_links(vault, f)
                     import mimetypes
                     self.send(200, f.read_bytes(), (mimetypes.guess_type(f.name)[0] or "application/octet-stream"))
                 elif path == "/api/note":
@@ -516,7 +665,17 @@ def serve(vault: Path, port: int, open_browser: bool):
             self.dispatch(go, True)
 
     srv = ThreadingHTTPServer(("127.0.0.1", port), H)
-    url = f"http://127.0.0.1:{port}/"
+    srv.daemon_threads = True
+    port = srv.server_address[1]
+    allowed_hosts.update({f"127.0.0.1:{port}", f"localhost:{port}"})
+    if watch > 0:
+        threading.Thread(target=watcher, name="vault-watcher", daemon=True).start()
+    return srv
+
+
+def serve(vault: Path, port: int, open_browser: bool, theme: bool = False, watch: float = 1.0):
+    srv = make_server(vault, port, theme, watch)
+    url = f"http://127.0.0.1:{srv.server_address[1]}/"
     print(f"Serving {vault} at {url}  (Ctrl+C to stop; deleted notes go to .trash)")
     if open_browser:
         webbrowser.open(url)
@@ -656,6 +815,10 @@ def main():
     ap.add_argument("vault", nargs="?", default=".", help="vault directory (default: .)")
     ap.add_argument("-o", "--out", default="explorer.html")
     ap.add_argument("--open", action="store_true", help="open in the default browser")
+    ap.add_argument("--theme", action="store_true",
+                    help="apply the vault's Obsidian theme and enabled CSS snippets (.obsidian/appearance.json)")
+    ap.add_argument("--watch", type=float, default=1.0, metavar="SECONDS",
+                    help="server mode: how often to check the vault for outside changes while a page is open (0 = off)")
     a = ap.parse_args()
 
     vault = Path(a.vault).expanduser().resolve()
@@ -664,9 +827,9 @@ def main():
     if a.mcp:
         return run_mcp(vault)
     if a.serve:
-        return serve(vault, a.port, a.open)
+        return serve(vault, a.port, a.open, a.theme, a.watch)
     out = Path(a.out).resolve()
-    out.write_text(page(vault, False), encoding="utf-8")
+    out.write_text(page(vault, False, theme=a.theme), encoding="utf-8")
     print(f"static read-only explorer -> {out}")
     if a.open:
         webbrowser.open(out.as_uri())

@@ -172,7 +172,26 @@ canvas{width:100%;height:100%;display:block;cursor:grab}
 
 @media(max-width:1000px){.nw{flex-direction:column-reverse;gap:8px}.toc{position:static;width:auto;max-height:none;border-bottom:1px solid var(--line);margin-bottom:10px;align-self:stretch;padding-bottom:10px}}
 @media(max-width:800px){#app{grid-template-columns:1fr}#side{position:fixed;inset:0 22% 0 0;z-index:5;display:none;box-shadow:var(--shadow)}#side.open{display:flex}#burger{display:inline-flex}.pad{padding:18px 16px 48px}.note h1{font-size:30px}.edsplit{grid-template-columns:1fr;grid-template-rows:1fr 1fr}#ta{border-right:0;border-bottom:1px solid var(--line)}#gtools{right:auto}}
+.livewarn{margin:0 0 14px;padding:8px 12px;border-radius:10px;border:1px solid var(--line);background:var(--panel2);color:var(--dim)}
+
+/* --theme: Obsidian's default palette at zero specificity, so the vault's theme (below) overrides any of it */
+:where(body.obs.theme-dark){--color-base-00:#1e1e1e;--color-base-10:#242424;--color-base-20:#262626;--color-base-25:#2a2a2a;
+  --color-base-30:#363636;--color-base-35:#3f3f3f;--color-base-40:#555;--color-base-50:#666;--color-base-60:#999;--color-base-70:#b3b3b3;
+  --color-base-100:#dadada;--mono-rgb-100:255,255,255;--accent-h:254;--accent-s:80%;--accent-l:68%;color-scheme:dark}
+:where(body.obs.theme-light){--color-base-00:#fff;--color-base-10:#fafafa;--color-base-20:#f6f6f6;--color-base-25:#e3e3e3;
+  --color-base-30:#e0e0e0;--color-base-35:#d4d4d4;--color-base-40:#bdbdbd;--color-base-50:#ababab;--color-base-60:#707070;--color-base-70:#5c5c5c;
+  --color-base-100:#222;--mono-rgb-100:0,0,0;--accent-h:258;--accent-s:88%;--accent-l:66%;color-scheme:light}
+:where(body.obs){--background-primary:var(--color-base-00);--background-secondary:var(--color-base-20);
+  --background-modifier-border:var(--color-base-30);--background-modifier-hover:rgba(var(--mono-rgb-100),.075);
+  --text-normal:var(--color-base-100);--text-muted:var(--color-base-70);--text-faint:var(--color-base-50);
+  --interactive-accent:hsl(var(--accent-h),var(--accent-s),var(--accent-l));--text-accent:var(--interactive-accent);--code-normal:var(--text-normal)}
+/* our variables follow the theme's */
+body.obs{--bg:var(--background-primary);--bgs:var(--background-primary);--side:var(--background-secondary);--panel:var(--background-secondary);
+  --panel2:var(--background-modifier-hover);--line:var(--background-modifier-border);--fg:var(--text-normal);--dim:var(--text-muted);
+  --ghost:var(--text-faint);--acc:var(--text-accent);--acc2:var(--interactive-accent);--code:var(--code-normal);
+  --grad:var(--interactive-accent);--glow1:transparent;--glow2:transparent;color:var(--fg)}
 </style>
+<style id="obscss">/*__OBSCSS__*/</style>
 </head>
 <body>
 <div id="app">
@@ -217,7 +236,7 @@ canvas{width:100%;height:100%;display:block;cursor:grab}
     <div class="view" id="v-note"><div class="pad note" id="noteBody"></div></div>
   </section>
 </div>
-<script>window.LIVE=/*__LIVE__*/false;</script>
+<script>window.LIVE=/*__LIVE__*/false;window.OBS=/*__OBS__*/null;</script>
 <script type="application/json" id="data">/*__DATA__*/</script>
 <script>
 "use strict";
@@ -229,11 +248,15 @@ const esc = s => String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>
 const un = s => s.replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&quot;/g,'"').replace(/&amp;/g,'&');
 const tagHue = s => { let h = 7; for (const c of String(s)) h = (h * 31 + c.charCodeAt(0)) % 360; return h; };
 (function () {
-  const root = document.documentElement;
-  try { const s = localStorage.getItem('theme'); if (s) root.dataset.theme = s; } catch (e) {}
+  const root = document.documentElement, mq = matchMedia('(prefers-color-scheme:light)'), obs = window.OBS;
+  try { const s = localStorage.getItem('theme'); if (s) root.dataset.theme = s; else if (obs && obs.mode) root.dataset.theme = obs.mode; } catch (e) {}
+  const mode = () => root.dataset.theme || (mq.matches ? 'light' : 'dark');
+  // --theme: an Obsidian theme styles body.theme-dark / body.theme-light, so mirror our light/dark choice there
+  const sync = () => { if (!obs) return; document.body.classList.add('obs'); document.body.classList.toggle('theme-dark', mode() === 'dark'); document.body.classList.toggle('theme-light', mode() === 'light'); };
+  sync(); mq.addEventListener && mq.addEventListener('change', () => { sync(); if (typeof G !== 'undefined') G.needs = true; });
   $('#theme').onclick = () => {
-    const cur = root.dataset.theme || (matchMedia('(prefers-color-scheme:light)').matches ? 'light' : 'dark'), nx = cur === 'dark' ? 'light' : 'dark';
-    root.dataset.theme = nx; G.needs = true; try { localStorage.setItem('theme', nx); } catch (e) {}
+    const nx = mode() === 'dark' ? 'light' : 'dark';
+    root.dataset.theme = nx; sync(); G.needs = true; try { localStorage.setItem('theme', nx); } catch (e) {}
   };
 })();
 const fmtDate = t => new Date(t * 1000).toISOString().slice(0, 10);
@@ -249,14 +272,15 @@ function ingest(d) {
   folders = [...new Set(notes.map(topFolder))].sort();
 }
 ingest(D);
-const CC = new Map();                                   // live mode: "id@mtime" -> content
+const CC = new Map();                                   // live mode: "id@rev" -> content (rev = exact file mtime)
 const hasContent = n => typeof n.content === 'string';
-const contentOf = n => hasContent(n) ? n.content : (CC.get(n.id + '@' + n.mtime) ?? '');
+const ckey = n => n.id + '@' + (n.rev || n.mtime);
+const contentOf = n => hasContent(n) ? n.content : (CC.get(ckey(n)) ?? '');
 async function ensureContent(ids) {
-  const need = [...new Set(ids)].filter(id => { const n = byId.get(id); return n && !hasContent(n) && !CC.has(id + '@' + n.mtime); });
+  const need = [...new Set(ids)].filter(id => { const n = byId.get(id); return n && !hasContent(n) && !CC.has(ckey(n)); });
   for (let i = 0; i < need.length; i += 500) {
     const r = await api('POST', '/api/contents', { ids: need.slice(i, i + 500) });
-    for (const [id, c] of Object.entries(r)) { const n = byId.get(id); if (n) CC.set(id + '@' + n.mtime, c); }
+    for (const [id, c] of Object.entries(r)) { const n = byId.get(id); if (n) CC.set(ckey(n), c); }
   }
 }
 function embedIds(text, fromId) {
@@ -784,7 +808,7 @@ function resize() {
 new ResizeObserver(resize).observe(cv);
 
 function draw() {
-  const css = getComputedStyle(document.documentElement), dpr = devicePixelRatio || 1;
+  const css = getComputedStyle(document.body), dpr = devicePixelRatio || 1;   // body: an Obsidian theme sets its colours there
   const fg = css.getPropertyValue('--fg').trim(), dim = css.getPropertyValue('--dim').trim();
   const acc = css.getPropertyValue('--acc').trim(), bgs = (css.getPropertyValue('--bgs') || css.getPropertyValue('--bg')).trim();
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.clearRect(0, 0, G.w, G.h);
@@ -1015,11 +1039,47 @@ async function changeVault() {
   if (!p || p.trim() === cur) return;
   try {
     await api('POST', '/api/vault', { path: p });
+    if (window.OBS) { ED.dirty = false; location.hash = 'index'; location.reload(); return; }   // the new vault has its own theme
     ED.dirty = false; curNote = null; $('#tnote').style.display = 'none';
     await reload();
     $('#vname').textContent = D.vault; document.title = D.vault + ' · Vault Explorer';
     location.hash = 'index';
   } catch (e) { alert(e.message); }
+}
+/* ---------- live refresh: the server pushes `change` when the vault changes on disk (e.g. edited in Obsidian) ---------- */
+async function liveRefresh() {
+  const view = (document.querySelector('.view.active') || {}).id;
+  if (view === 'v-edit' && ED.dirty) {      // never touch unsaved text: just warn (the save would be refused anyway)
+    if (ED.id && !ED.isNew) {
+      try { const r = await api('GET', '/api/note?id=' + encodeURIComponent(ED.id)); if (r.mtime !== ED.mtime) msg('changed on disk since you opened it — copy your text before saving', true); }
+      catch (e) { msg('this note was removed or renamed on disk', true); }
+    }
+    return;
+  }
+  await reload();
+  if (view === 'v-graph') rebuild(true);
+  if (view === 'v-note' && curNote) {
+    if (!byId.has(curNote)) {
+      if (!$('#noteBody .livewarn')) $('#noteBody').insertAdjacentHTML('afterbegin', '<div class="livewarn">This note was deleted or renamed on disk.</div>');
+      return;
+    }
+    const box = $('#v-note'), top = box.scrollTop;
+    await showNote(curNote); box.scrollTop = top; spy();
+  } else if (view === 'v-edit' && ED.id && !ED.isNew) {   // open in the editor, no local changes: take the new text
+    try { const r = await api('GET', '/api/note?id=' + encodeURIComponent(ED.id)); if (r.mtime !== ED.mtime) { const ta = $('#ta'), s = ta.selectionStart; ta.value = r.raw; ED.mtime = r.mtime; ta.selectionStart = ta.selectionEnd = Math.min(s, r.raw.length); preview(); msg('reloaded from disk'); } }
+    catch (e) { msg('this note was removed or renamed on disk', true); }
+  }
+}
+if (LIVE && window.EventSource) {
+  let running = false, again = false;
+  const run = async () => {
+    if (running) { again = true; return; }
+    running = true;
+    try { do { again = false; await liveRefresh(); } while (again); }
+    catch (e) { console.warn('live refresh failed', e); }
+    finally { running = false; }
+  };
+  new EventSource('/api/events').addEventListener('change', run);
 }
 if (LIVE) {
   document.addEventListener('keydown', e => { if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'o') { e.preventDefault(); changeVault(); } });
