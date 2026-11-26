@@ -236,7 +236,7 @@ body.obs{--bg:var(--background-primary);--bgs:var(--background-primary);--side:v
     <div class="view" id="v-note"><div class="pad note" id="noteBody"></div></div>
   </section>
 </div>
-<script>window.LIVE=/*__LIVE__*/false;window.OBS=/*__OBS__*/null;</script>
+<script>window.LIVE=/*__LIVE__*/false;window.OBS=/*__OBS__*/null;window.NATIVE=/*__NATIVE__*/false;</script>
 <script type="application/json" id="data">/*__DATA__*/</script>
 <script>
 "use strict";
@@ -1035,10 +1035,15 @@ async function changeVault() {
   if (ED.dirty && !confirm('Discard unsaved changes?')) return;
   let cur = '';
   try { cur = (await api('GET', '/api/vault')).path; } catch (e) { /* ignore */ }
-  const p = prompt('Open vault (folder path):', cur);
-  if (!p || p.trim() === cur) return;
   try {
-    await api('POST', '/api/vault', { path: p });
+    if (window.NATIVE) {    // app window: the native folder dialog
+      const r = await api('POST', '/api/pick-vault');
+      if (!r.ok || r.path === cur) return;
+    } else {
+      const p = prompt('Open vault (folder path):', cur);
+      if (!p || p.trim() === cur) return;
+      await api('POST', '/api/vault', { path: p });
+    }
     if (window.OBS) { ED.dirty = false; location.hash = 'index'; location.reload(); return; }   // the new vault has its own theme
     ED.dirty = false; curNote = null; $('#tnote').style.display = 'none';
     await reload();

@@ -1,7 +1,11 @@
 # fastobsidian
 
-A quick, dependency-free explorer and editor for an [Obsidian](https://obsidian.md) vault.
-One Python script (standard library only) plus one HTML template. No build step, no network calls.
+A quick explorer and editor for an [Obsidian](https://obsidian.md) vault, in its own window.
+One Rust program: it opens the vault in a native window that uses the system's web view
+(WebView2 on Windows, WebKit on macOS and Linux), so no external browser is involved. No network calls.
+
+The original Python version (`obsidian_explorer.py`, standard library only) is still here and works the same way
+in a browser; see [Python version](#python-version).
 
 ## Features
 
@@ -14,28 +18,44 @@ One Python script (standard library only) plus one HTML template. No build step,
 - **Table of contents** – clickable per-note TOC that tracks your scroll position
 - **Theme** – glass-style UI with a light/dark toggle (follows the system by default, choice is remembered);
   `--theme` applies the vault's own Obsidian theme and enabled CSS snippets instead
-- **Large vaults** (server mode) – incremental index that re-reads only changed files; search runs server-side
-- **Live refresh** (server mode) – notes edited outside the app (e.g. in Obsidian) update in the open page within about a second
-- **Editing** (server mode) – create, edit, rename and delete notes with a split markdown editor and live preview
-- **Vault switching** (server mode) – Ctrl+O opens another vault without restarting
+- **Large vaults** – incremental index that re-reads only changed files; search runs in the app
+- **Live refresh** – notes edited outside the app (e.g. in Obsidian) update in the open window within about a second
+- **Editing** – create, edit, rename and delete notes with a split markdown editor and live preview
+- **Vault switching** – Ctrl+O opens another vault (native folder dialog) without restarting
 - **MCP server** – `--mcp` exposes search, read, write/append, index, backlinks, rename and delete to AI agents over stdio
 
-## Usage
+## Build and run
 
-Requires Python 3.9+.
+Requires a recent stable [Rust](https://rustup.rs). On Linux also the WebKitGTK development packages
+(Debian/Ubuntu: `sudo apt install libwebkit2gtk-4.1-dev libgtk-3-dev`). Windows 10/11 already has WebView2.
 
 ```bash
-# Live mode: browse and edit at http://127.0.0.1:8765/
-python obsidian_explorer.py /path/to/vault --serve --open
+cargo build --release            # -> target/release/fastobsidian(.exe), a single file
 
-# Read-only: write a single self-contained explorer.html
-python obsidian_explorer.py /path/to/vault -o explorer.html --open
+fastobsidian /path/to/vault      # open the vault in the app window
+fastobsidian                     # no vault: a folder dialog asks for one
 ```
 
-Options: `--port N` (default 8765), `-o FILE` (static output), `--open` (launch browser), `--mcp` (MCP server on stdio, see below),
-`--theme` (use the vault's Obsidian theme, see below), `--watch SECONDS` (how often the server checks the vault for outside changes
-while a page is open, default 1; `0` turns it off).
-Try it with the bundled `sample-vault/`.
+The binary can be copied anywhere: the page is built into it. Other modes of the same program:
+
+```bash
+fastobsidian /path/to/vault --serve            # serve at http://127.0.0.1:8765/ for any browser (headless)
+fastobsidian /path/to/vault -o explorer.html   # write a self-contained read-only page
+fastobsidian /path/to/vault --mcp              # MCP server on stdio
+```
+
+Options: `--theme` (use the vault's Obsidian theme, see below), `--watch SECONDS` (how often the vault is checked for
+outside changes while a window or page is open, default 1; `0` turns it off), `--port N` (for `--serve`, default 8765),
+`-o FILE` (static output), `--help`, `--version`. Try it with the bundled `sample-vault/`.
+
+### How the window works
+
+The app starts the same local server as `--serve` on `127.0.0.1` (port 47615, or a free one if that is taken) and shows
+it in a window with the system web view. The fixed port keeps the page's origin the same between launches, so the
+light/dark choice is remembered. Web and mail links open in your default browser, attachments (PDF, images, …) in their
+own app. Closing the window with unsaved editor text asks first. The web view keeps its data in
+`%LOCALAPPDATA%\fastobsidian` (Windows), `~/Library/Application Support/fastobsidian` (macOS) or
+`~/.local/share/fastobsidian` (Linux).
 
 ## Obsidian themes and snippets
 
@@ -48,32 +68,33 @@ page may make network requests. It is off by default.
 
 ## Live refresh
 
-In server mode, an open page listens on `/api/events` and the server checks the vault every `--watch` seconds while a page is
-open (no checks when none is). When something changes on disk, the index, sidebar and graph reload and the open note is
+An open window or page listens on `/api/events`, and the vault is checked every `--watch` seconds while one is open
+(no checks when none is). When something changes on disk, the index, sidebar and graph reload and the open note is
 re-rendered at the same scroll position. In the editor, a note without local changes takes the new text; with unsaved
 changes, your text is kept and a warning says the file changed on disk (saving would be refused anyway).
 
 ## MCP server (for AI agents)
 
-`python obsidian_explorer.py /path/to/vault --mcp` speaks MCP over stdio. Tools: `search` (ranked: name > alias > tag > body, optional `tag`),
+`fastobsidian /path/to/vault --mcp` speaks MCP over stdio. Tools: `search` (ranked: name > alias > tag > body, optional `tag`),
 `read`, `write` (`append` default, `overwrite`, `create`; `tags`/`aliases` become frontmatter on new notes), `index`, `backlinks`, `rename`, `delete` (to `.trash`).
 
 ```json
-{ "mcpServers": { "vault": { "command": "python", "args": ["/path/obsidian_explorer.py", "/path/to/vault", "--mcp"] } } }
+{ "mcpServers": { "vault": { "command": "/path/to/fastobsidian", "args": ["/path/to/vault", "--mcp"] } } }
 ```
 
-Frontmatter `aliases` also resolve `[[alias]]` links. Run tests with `python -m unittest discover -s tests`.
+Frontmatter `aliases` also resolve `[[alias]]` links.
 
 ## Editing
 
-In live mode each note has **edit**, **rename** and **delete** buttons, and the sidebar has **+ New note**
-(path like `Folder/Name`). Ctrl+S saves; Ctrl+O switches to another vault (asks for a folder path); a toolbar inserts bold, italic, headings, lists, tasks, `[[links]]`, code and tags.
+Each note has **edit**, **rename** and **delete** buttons, and the sidebar has **+ New note**
+(path like `Folder/Name`). Ctrl+S saves; Ctrl+O switches to another vault; a toolbar inserts bold, italic, headings, lists, tasks, `[[links]]`, code and tags.
 
 - **Delete is recoverable**: files move to `<vault>/.trash/`.
 - **Rename updates links**: `[[wikilinks]]` and markdown `[text](x.md)` links in other notes are repointed
   (markdown links are rewritten relative to each note; a moved note's own relative links are fixed too).
+  The Rust version keeps each note's line endings when it rewrites links.
 - **Conflict check**: saving is refused if the file changed on disk since you opened it.
-- Saving normalises line endings to LF.
+- Saving from the editor writes LF line endings.
 
 ## Security
 
@@ -89,17 +110,32 @@ of the index and refused by read and write (`MAX_NOTE_BYTES`).
 ## Notes
 
 - Folders starting with `.` (e.g. `.obsidian`, `.trash`) are ignored.
-- Attachments (images, PDF, audio, video) are detected and resolved by the index; the file type list is `MEDIA_EXT` in `obsidian_explorer.py`.
+- Attachments (images, PDF, audio, video) are detected and resolved by the index; the file type list is `MEDIA_EXT` in `src/vault.rs`.
 - `explorer.html` embeds your vault's content; it is gitignored by default, so do not commit or share it unintentionally.
+
+## Python version
+
+`obsidian_explorer.py` needs only Python 3.9+ and runs in your browser instead of a window. Same options, plus `--open`
+to launch the browser; no `pick folder` dialog (Ctrl+O asks for a path).
+
+```bash
+python obsidian_explorer.py /path/to/vault --serve --open      # http://127.0.0.1:8765/
+python obsidian_explorer.py /path/to/vault -o explorer.html --open
+python obsidian_explorer.py /path/to/vault --mcp
+```
 
 ## Files
 
 | File | Purpose |
 |---|---|
-| `obsidian_explorer.py` | Vault parser, static generator and local server |
-| `explorer_template.html` | UI (index, graph, note view, editor) |
+| `src/main.rs`, `src/gui.rs` | Command line and the app window |
+| `src/vault.rs` | Parsing, incremental index, search |
+| `src/ops.rs` | Safe paths, read/save/create/rename (link rewriting)/trash |
+| `src/server.rs`, `src/page.rs`, `src/mcp.rs` | Local server and live events, page and themes, MCP server |
+| `explorer_template.html` | UI (index, graph, note view, editor), built into the binary and used by the Python version |
+| `obsidian_explorer.py` | Python version |
 | `sample-vault/` | Demo notes |
-| `tests/` | Unit tests (`python -m unittest discover -s tests`), run by GitHub Actions on Linux, Windows and macOS |
+| `tests/` | `cargo test` (Rust) and `python -m unittest discover -s tests` (Python), run by GitHub Actions on Linux, Windows and macOS |
 
 ## License
 
