@@ -37,8 +37,8 @@ jobs:
         os: [ubuntu-latest, windows-latest, macos-latest]
         python: ["3.13"]
         include:
-          - os: ubuntu-latest
-            python: "3.9"      # oldest supported version
+          - os: ubuntu-24.04   # oldest supported version; setup-python has no 3.9 for Ubuntu 26.04
+            python: "3.9"
           - os: windows-latest
             python: "3.9"
     runs-on: ${{ matrix.os }}
