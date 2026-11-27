@@ -390,6 +390,51 @@ fn static_build_of_sample_vault() {
 }
 
 #[test]
+fn moment_formats() {
+    use chrono::TimeZone;
+    let t = chrono::Local.with_ymd_and_hms(2026, 3, 2, 9, 5, 7).unwrap();
+    let f = |p| fastobsidian::daily::moment_format(&t, p);
+    assert_eq!(f("YYYY-MM-DD"), "2026-03-02");
+    assert_eq!(f("dddd, MMMM Do YYYY"), "Monday, March 2nd 2026");
+    assert_eq!(f("YYYY/MM/[Week] D"), "2026/03/Week 2");
+    assert_eq!(f("HH:mm:ss"), "09:05:07");
+}
+
+#[test]
+fn daily_note_uses_settings_and_template() {
+    let v = make_vault(&[
+        (".obsidian/daily-notes.json", r#"{"folder": "Journal", "format": "YYYY-MM-DD", "template": "Tpl/Day"}"#),
+        ("Tpl/Day.md", "# {{title}}\ncreated {{date:YYYY}}\n"),
+    ]);
+    let idx = VaultIndex::new(&v);
+    let r = fastobsidian::daily::daily_note(&v, &idx).unwrap();
+    let today = chrono::Local::now().format("%Y-%m-%d").to_string();
+    assert_eq!(r["id"], format!("Journal/{today}"));
+    assert_eq!(r["created"], true);
+    let text = read(v.join("Journal").join(format!("{today}.md")));
+    assert_eq!(text, format!("# {today}\ncreated {}\n", &today[..4]));
+    // a second call opens the same note without touching it
+    fs::write(v.join("Journal").join(format!("{today}.md")), "mine").unwrap();
+    assert_eq!(fastobsidian::daily::daily_note(&v, &idx).unwrap()["created"], false);
+    assert_eq!(read(v.join("Journal").join(format!("{today}.md"))), "mine");
+}
+
+#[test]
+fn attachments_follow_the_folder_setting_and_never_overwrite() {
+    let v = make_vault(&[(".obsidian/app.json", r#"{"attachmentFolderPath": "./assets"}"#), ("Notes/A.md", "a")]);
+    let idx = VaultIndex::new(&v);
+    let save = |name: &str| fastobsidian::daily::save_attachment(&v, &idx, "Notes/A", name, b"PNG");
+    let r = save("shot.png").unwrap();
+    assert_eq!(r["path"], "Notes/assets/shot.png");
+    assert_eq!(r["embed"], "shot.png");
+    assert_eq!(save("shot.png").unwrap()["path"], "Notes/assets/shot 1.png");
+    assert_eq!(fs::read(v.join("Notes/assets/shot.png")).unwrap(), b"PNG");
+    assert!(save("evil.exe").is_err());
+    assert!(save("noext").is_err());
+    assert_eq!(save("../../x.png").unwrap()["path"], "Notes/assets/x.png");
+}
+
+#[test]
 fn index_cache_round_trips_exactly() {
     use fastobsidian::{cache, vault};
     let v = make_vault(&[

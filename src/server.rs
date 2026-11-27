@@ -2,6 +2,7 @@
 //!
 //! Hand-rolled HTTP/1.1 with one thread per connection and `Connection: close`: the clients are
 //! one local webview or browser, so this stays small and dependency-free.
+use crate::daily::{daily_note, save_attachment};
 use crate::ops::{create_note, no_links, read_note, rename_note, save_note, trash_note, Error};
 use crate::page::live_page;
 use crate::vault::{max_note_bytes, unquote, VaultIndex, MEDIA_EXT};
@@ -357,6 +358,8 @@ fn route(req: &Request, s: &Shared, vault: &Path, idx: &Arc<VaultIndex>) -> Resu
             let d = req.json()?;
             Json(create_note(vault, idx, d["id"].as_str().unwrap_or(""), d["raw"].as_str().unwrap_or(""))?)
         }
+        ("POST", "/api/daily") => Json(daily_note(vault, idx)?),
+        ("POST", "/api/attachment") => Json(save_attachment(vault, idx, req.q("note"), req.q("name"), &req.body)?),
         ("POST", "/api/rename") => {
             let d = req.json()?;
             Json(rename_note(vault, idx, d["id"].as_str().unwrap_or(""), d["new"].as_str().unwrap_or(""))?)

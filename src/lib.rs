@@ -3,6 +3,7 @@
 //! The same code serves the app window, `--serve` (local server for any browser),
 //! `-o FILE` (self-contained read-only page) and `--mcp` (MCP server on stdio).
 pub mod cache;
+pub mod daily;
 pub mod mcp;
 pub mod ops;
 pub mod page;

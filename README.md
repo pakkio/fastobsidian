@@ -18,9 +18,11 @@ in a browser; see [Python version](#python-version).
 - **Table of contents** – clickable per-note TOC that tracks your scroll position
 - **Theme** – glass-style UI with a light/dark toggle (follows the system by default, choice is remembered);
   `--theme` applies the vault's own Obsidian theme and enabled CSS snippets instead
-- **Large vaults** – incremental index that re-reads only changed files; search runs in the app
+- **Large vaults** – parallel, incremental index with an on-disk cache: 40,000 notes open in about 0.2 s (0.9 s the first time); a small splash with a progress bar appears only when loading is slow
 - **Live refresh** – notes edited outside the app (e.g. in Obsidian) update in the open window within about a second
-- **Editing** – create, edit, rename and delete notes with a split markdown editor and live preview
+- **Editing** – create, edit, rename and delete notes in a live editor (every line formatted, the line you edit shown as markdown) or a split source + preview editor
+- **Daily notes** – "Today's note" (Alt+D) opens or creates today's note, following Obsidian's Daily Notes settings and template
+- **Images** – paste, drop or pick images and other media; they are saved in the vault's attachment folder and embedded as `![[…]]`
 - **Vault switching** – Ctrl+O opens another vault (native folder dialog) without restarting
 - **MCP server** – `--mcp` exposes search, read, write/append, index, backlinks, rename and delete to AI agents over stdio
 
@@ -96,6 +98,18 @@ Frontmatter `aliases` also resolve `[[alias]]` links.
 
 Each note has **edit**, **rename** and **delete** buttons, and the sidebar has **+ New note**
 (path like `Folder/Name`). Ctrl+S saves; Ctrl+O switches to another vault; a toolbar inserts bold, italic, headings, lists, tasks, `[[links]]`, code and tags.
+
+- **Live editor** (default; the toolbar's Live / Source button switches to source + preview, and the choice is
+  remembered): every line is rendered; click a line to edit its markdown, with the caret where you clicked. Enter
+  continues lists and tasks (an empty item ends the list), Backspace at the start of a line joins it to the one above,
+  arrow keys move between lines, Esc stops editing. Click a task's box to tick it; Ctrl+click follows a link.
+- **Today's note** (sidebar button or Alt+D): opens today's daily note in the editor, creating it if needed, with the
+  folder, date format and template from `.obsidian/daily-notes.json` (`{{title}}`, `{{date}}`, `{{time}}`,
+  `{{date:FORMAT}}` are filled in). Without settings it is `YYYY-MM-DD.md` at the top of the vault.
+- **Images and media**: paste a screenshot, drop files on the editor or use the image button. Files go to the folder
+  set as "attachmentFolderPath" in `.obsidian/app.json` (vault root, the note's folder, or a subfolder of it), are never
+  overwritten (`name 1.png`), and `![[name.png]]` is inserted at the caret. Pasted images are named like Obsidian's
+  (`Pasted image 20261127092201.png`). Daily notes and attachments need the Rust version.
 
 - **Delete is recoverable**: files move to `<vault>/.trash/`.
 - **Rename updates links**: `[[wikilinks]]` and markdown `[text](x.md)` links in other notes are repointed

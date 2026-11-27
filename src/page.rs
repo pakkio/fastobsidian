@@ -88,6 +88,8 @@ pub fn render(vault: &Path, live: bool, data: &str, theme: bool, native: bool) -
         .replace_all(TEMPLATE, |c: &regex::Captures| match &c[1] {
             "LIVE" => live.to_string(),
             "NATIVE" => native.to_string(),
+            // daily notes and attachments (the Python version's server has neither)
+            "EXTRAS" => live.to_string(),
             "DATA" => data.replace("</", "<\\/"),
             "OBS" => match &obs {
                 Some(o) => json!({"mode": o.mode, "theme": o.theme}).to_string().replace("</", "<\\/"),
