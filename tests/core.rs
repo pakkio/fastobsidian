@@ -9,6 +9,7 @@ use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpStream;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 
 fn make_vault(files: &[(&str, &str)]) -> PathBuf {
@@ -231,7 +232,9 @@ fn http(port: u16, req: &str) -> (u16, String) {
 #[test]
 fn server_routes_and_guards() {
     let v = make_vault(&[("a.md", "one [[b]]"), ("img.png", "png"), ("b.md", "two")]);
-    let srv = Server::bind(&v, Options { port: 0, theme: false, watch: 0.0, native: false, picker: None }).unwrap();
+    let srv =
+        Server::bind(&v, Options { port: 0, theme: false, watch: 0.0, native: false, picker: None, cache: false })
+            .unwrap();
     let port = srv.port;
     srv.spawn();
     let host = format!("Host: 127.0.0.1:{port}\r\n");
@@ -259,7 +262,9 @@ fn server_routes_and_guards() {
 #[test]
 fn server_pushes_change_event() {
     let v = make_vault(&[("a.md", "one")]);
-    let srv = Server::bind(&v, Options { port: 0, theme: false, watch: 0.1, native: false, picker: None }).unwrap();
+    let srv =
+        Server::bind(&v, Options { port: 0, theme: false, watch: 0.1, native: false, picker: None, cache: false })
+            .unwrap();
     let port = srv.port;
     srv.spawn();
     let mut s = TcpStream::connect(("127.0.0.1", port)).unwrap();
@@ -382,4 +387,36 @@ fn mcp_over_stdio_binary() {
 fn static_build_of_sample_vault() {
     let html = page::static_page(&std::path::absolute("sample-vault").unwrap(), false);
     assert!(html.contains("window.LIVE=false;") && html.contains("\"Home\""));
+}
+
+#[test]
+fn index_cache_round_trips_exactly() {
+    use fastobsidian::{cache, vault};
+    let v = make_vault(&[
+        ("A.md", "---\ntags: [x]\naliases: [Alpha]\nn: 1.5\n---\n# A\nsee [[B]] and [c](C.md) #t\n"),
+        ("sub/B.md", "Ünïcode [[A|a]] ```#no``` `#no` #yes\n"),
+        ("empty.md", ""),
+    ]);
+    let (md, _) = vault::walk_vault(&v);
+    let fresh: Vec<_> = md
+        .iter()
+        .map(|f| {
+            (f.rel.clone(), f.mtime_ns, f.size, Arc::new(vault::parse_note(&f.rel, f.mtime_ns, &read(f.path.clone()))))
+        })
+        .collect();
+    let file = v.join("cache.idx");
+    cache::save(&file, &v, &fresh).unwrap();
+    let loaded = cache::load(&file, &v).expect("cache loads");
+    assert_eq!(loaded.len(), fresh.len());
+    for (rel, m, s, n) in &fresh {
+        let (lm, ls, ln) = &loaded[rel];
+        assert_eq!((lm, ls), (m, s));
+        assert_eq!(format!("{ln:?}"), format!("{n:?}"), "{rel}");
+    }
+    // another vault, or a damaged file, is not used
+    assert!(cache::load(&file, &v.join("sub")).is_none());
+    let mut bytes = fs::read(&file).unwrap();
+    bytes.truncate(bytes.len() - 3);
+    fs::write(&file, bytes).unwrap();
+    assert!(cache::load(&file, &v).is_none());
 }

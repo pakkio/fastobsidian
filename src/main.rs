@@ -105,7 +105,8 @@ fn main() -> ExitCode {
             println!("static read-only explorer -> {}", out.display());
         } else if a.serve {
             let v = vault(&a.vault)?;
-            let opts = Options { port: a.port, theme: a.theme, watch: a.watch, native: false, picker: None };
+            let opts =
+                Options { port: a.port, theme: a.theme, watch: a.watch, native: false, picker: None, cache: true };
             let srv = Server::bind(&v, opts).map_err(|e| format!("cannot listen on 127.0.0.1:{}: {e}", a.port))?;
             println!("Serving {} at {}  (Ctrl+C to stop; deleted notes go to .trash)", v.display(), srv.url());
             srv.run();

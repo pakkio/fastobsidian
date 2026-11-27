@@ -89,7 +89,7 @@ pub fn run(vault: Option<PathBuf>, theme: bool, watch: f64) -> Result<(), String
         Some(v) => v,
         None => rfd::FileDialog::new().set_title("Open an Obsidian vault").pick_folder().ok_or("no folder chosen")?,
     };
-    let opts = |port| Options { port, theme, watch, native: true, picker: Some(picker(&proxy)) };
+    let opts = |port| Options { port, theme, watch, native: true, picker: Some(picker(&proxy)), cache: true };
     let server = Server::bind(&vault, opts(PREFERRED_PORT))
         .or_else(|_| Server::bind(&vault, opts(0)))
         .map_err(|e| format!("cannot start the local server: {e}"))?;

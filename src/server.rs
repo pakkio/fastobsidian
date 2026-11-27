@@ -26,6 +26,8 @@ pub struct Options {
     /// running inside the app window
     pub native: bool,
     pub picker: Option<FolderPicker>,
+    /// keep an on-disk cache of parsed notes, so restarts re-read only what changed
+    pub cache: bool,
 }
 
 struct Events {
@@ -51,7 +53,7 @@ impl Server {
     pub fn bind(vault: &Path, opts: Options) -> io::Result<Server> {
         let listener = TcpListener::bind(("127.0.0.1", opts.port))?;
         let port = listener.local_addr()?.port();
-        let idx = Arc::new(VaultIndex::new(vault));
+        let idx = Arc::new(if opts.cache { VaultIndex::with_cache(vault) } else { VaultIndex::new(vault) });
         let t0 = std::time::Instant::now();
         let n = idx.build(false).notes.len();
         eprintln!("indexed {n} notes in {:.1}s", t0.elapsed().as_secs_f64());
@@ -381,7 +383,7 @@ fn switch(s: &Shared, path: &str) -> Result<Value, Error> {
     if !new.is_dir() {
         return Err(Error::Invalid(format!("not a directory: {}", new.display())));
     }
-    let idx = Arc::new(VaultIndex::new(&new));
+    let idx = Arc::new(if s.opts.cache { VaultIndex::with_cache(&new) } else { VaultIndex::new(&new) });
     idx.build(false);
     *s.current.write().unwrap() = (new.clone(), idx);
     Ok(json!({"ok": true, "path": new.display().to_string()}))

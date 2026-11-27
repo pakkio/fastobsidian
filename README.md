@@ -73,6 +73,14 @@ An open window or page listens on `/api/events`, and the vault is checked every 
 re-rendered at the same scroll position. In the editor, a note without local changes takes the new text; with unsaved
 changes, your text is kept and a warning says the file changed on disk (saving would be refused anyway).
 
+## Index cache
+
+The app window and `--serve` keep the parsed notes in a cache file, one per vault, in `%LOCALAPPDATA%\fastobsidian\index-cache`
+(Windows), `~/Library/Application Support/fastobsidian/index-cache` (macOS) or `~/.cache/fastobsidian/index-cache`
+(Linux). On the next start only notes whose modification time or size changed are read again: 40,000 notes open in
+about 0.2 s instead of 0.9 s. An entry is used only while the file still matches it, and a cache from another version
+or a damaged one is ignored, so deleting the folder is always safe. The cache holds the notes' text, like the vault.
+
 ## MCP server (for AI agents)
 
 `fastobsidian /path/to/vault --mcp` speaks MCP over stdio. Tools: `search` (ranked: name > alias > tag > body, optional `tag`),

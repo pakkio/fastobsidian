@@ -6,6 +6,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
+use std::thread;
 use std::time::{Duration, Instant, UNIX_EPOCH};
 
 /// Notes larger than this are left out of the index and refused by read and write:
@@ -372,7 +373,7 @@ fn parse_files(md: &[MdFile], todo: &[usize], progress: &dyn Fn(usize)) -> HashM
 }
 
 /// `f` over `items` on all cores, results in input order. Small inputs stay on this thread.
-fn map_parallel<T: Sync, R: Send>(items: &[T], f: impl Fn(&T) -> R + Sync) -> Vec<R> {
+pub(crate) fn map_parallel<T: Sync, R: Send>(items: &[T], f: impl Fn(&T) -> R + Sync) -> Vec<R> {
     let threads = std::thread::available_parallelism().map_or(4, |n| n.get()).clamp(1, 16);
     if items.len() < 256 || threads == 1 {
         return items.iter().map(f).collect();
@@ -481,11 +482,21 @@ struct Inner {
     by_id: HashMap<String, usize>,
     checked: Option<Instant>,
     stale: bool,
+    /// the on-disk cache was loaded (or tried) already
+    cache_tried: bool,
+    /// changes not yet written to the on-disk cache, and when it was last written
+    cache_unsaved: bool,
+    cache_saved: Option<Instant>,
 }
+
+/// The on-disk cache is rewritten at most this often (a missed save only costs re-reading a few notes).
+const CACHE_SAVE_EVERY: Duration = Duration::from_secs(30);
 
 /// Incremental vault index: re-reads only files whose mtime/size changed; caches the resolved result.
 pub struct VaultIndex {
     pub vault: PathBuf,
+    /// on-disk cache of parsed notes (see crate::cache); None = no cache
+    cache: Option<PathBuf>,
     inner: Mutex<Inner>,
     version: AtomicUsize,
 }
@@ -496,9 +507,15 @@ impl VaultIndex {
     pub fn new(vault: &Path) -> Self {
         VaultIndex {
             vault: vault.to_path_buf(),
+            cache: None,
             inner: Mutex::new(Inner { stale: true, ..Default::default() }),
             version: AtomicUsize::new(0),
         }
+    }
+
+    /// An index that starts from, and keeps updating, the vault's on-disk cache of parsed notes.
+    pub fn with_cache(vault: &Path) -> Self {
+        VaultIndex { cache: Some(crate::cache::cache_file(vault)), ..Self::new(vault) }
     }
 
     /// Bumped every time the vault content changes (the watcher pushes it to browsers).
@@ -534,6 +551,14 @@ impl VaultIndex {
                 return r.clone();
             }
         }
+        if !g.cache_tried {
+            g.cache_tried = true;
+            if let (Some(file), true) = (&self.cache, g.files.is_empty()) {
+                if let Some(files) = crate::cache::load(file, &self.vault) {
+                    g.files = files;
+                }
+            }
+        }
         let unchanged = |f: &MdFile| g.files.get(&f.rel).filter(|o| o.0 == f.mtime_ns && o.1 == f.size).cloned();
         let todo: Vec<usize> = (0..md.len()).filter(|&i| unchanged(&md[i]).is_none()).collect();
         let parsed = parse_files(&md, &todo, &|n| progress(md.len() - todo.len() + n, md.len()));
@@ -553,7 +578,22 @@ impl VaultIndex {
         }
         progress(md.len(), md.len());
         g.by_id = notes.iter().enumerate().map(|(i, n)| (n.id.clone(), i)).collect();
+        g.cache_unsaved |= !todo.is_empty() || files.len() != g.files.len();
         g.files = files;
+        if let Some(file) = &self.cache {
+            if g.cache_unsaved && g.cache_saved.is_none_or(|t| t.elapsed() >= CACHE_SAVE_EVERY) {
+                g.cache_unsaved = false;
+                g.cache_saved = Some(Instant::now());
+                let snap: Vec<_> = g.files.iter().map(|(r, (m, s, n))| (r.clone(), *m, *s, n.clone())).collect();
+                let (file, vault) = (file.clone(), self.vault.clone());
+                // in the background: startup and edits never wait for the write
+                thread::spawn(move || {
+                    if let Err(e) = crate::cache::save(&file, &vault, &snap) {
+                        eprintln!("index cache not saved: {e}");
+                    }
+                });
+            }
+        }
         let res = Arc::new(self.resolve(&notes, &media));
         g.notes = notes;
         g.result = Some(res.clone());
