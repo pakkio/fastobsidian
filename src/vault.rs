@@ -32,19 +32,51 @@ macro_rules! re {
     };
 }
 
-re!(fence_re, r"(?s)(```|~~~).*?\1");
-re!(inline_code_re, r"`[^`\n]*`");
-re!(wiki_re, r"(!?)\[\[([^\]|#]*)(#[^\]|]*)?(?:\|[^\]]*)?\]\]");
-re!(tag_re, r"(?<![\w/&#])#([A-Za-z_][\w/-]*)");
 re!(fm_re, r"(?s)\A---[ \t]*\r?\n(.*?)\r?\n---[ \t]*(?:\r?\n|\z)");
 // [text](note.md#h) or [text](<my note.md#h>) -- images (![..]) excluded
 re!(mdlink_re, r#"(?i)(?<!!)\[[^\]]*\]\((?:<([^>]+?\.md)(?:#[^>]*)?>|([^)\s#]+?\.md)(?:#[^)\s]*)?)(?:\s+"[^"]*")?\)"#);
 re!(scheme_re, r"(?i)\A[a-z][a-z0-9+.\-]*:");
-re!(word_re, r"\w+");
 re!(ws_re, r"\s+");
 re!(fm_item_re, r"\A\s*-\s+(.*)");
 re!(fm_kv_re, r"\A([\w-]+):\s*(.*)");
 re!(split_re, r"[,\s]+");
+
+// Note parsing runs on every note, so it uses the linear-time `regex` engine. Look-behinds and the
+// fence backreference, which push fancy-regex onto its slow backtracking engine, are rewritten.
+macro_rules! fast_re {
+    ($name:ident, $pat:expr) => {
+        fn $name() -> &'static regex::Regex {
+            static R: OnceLock<regex::Regex> = OnceLock::new();
+            R.get_or_init(|| regex::Regex::new($pat).expect($pat))
+        }
+    };
+}
+
+fast_re!(fence_fast, r"(?s)```.*?```|~~~.*?~~~"); // = (```|~~~).*?\1
+fast_re!(inline_code_fast, r"`[^`\n]*`");
+fast_re!(wiki_fast, r"(!?)\[\[([^\]|#]*)(#[^\]|]*)?(?:\|[^\]]*)?\]\]");
+fast_re!(tag_fast, r"#([A-Za-z_][\w/-]*)"); // + not after [\w/&#]
+fast_re!(tag_before, r"\A[\w/&#]\z");
+fast_re!(mdlink_fast, r#"(?i)\[[^\]]*\]\((?:<([^>]+?\.md)(?:#[^>]*)?>|([^)\s#]+?\.md)(?:#[^)\s]*)?)(?:\s+"[^"]*")?\)"#); // + not after !
+fast_re!(word_fast, r"\w+");
+
+/// All captures of `re` in `text`, skipping matches whose preceding character satisfies `bad`:
+/// a negative one-character look-behind. A skipped match resumes one character later, as a regex would.
+fn captures_not_after<'t>(re: &regex::Regex, text: &'t str, bad: impl Fn(&str) -> bool) -> Vec<regex::Captures<'t>> {
+    let (mut out, mut at) = (vec![], 0);
+    while at <= text.len() {
+        let Some(c) = re.captures_at(text, at) else { break };
+        let m = c.get(0).unwrap();
+        let prev = text[..m.start()].chars().next_back();
+        if prev.is_some_and(|ch| bad(&text[m.start() - ch.len_utf8()..m.start()])) {
+            at = m.start() + text[m.start()..].chars().next().map_or(1, char::len_utf8);
+        } else {
+            at = m.end().max(m.start() + 1);
+            out.push(c);
+        }
+    }
+    out
+}
 
 /// Percent-decoding like Python's `urllib.parse.unquote` (invalid UTF-8 becomes U+FFFD).
 pub fn unquote(s: &str) -> String {
@@ -176,8 +208,8 @@ impl Note {
 pub fn parse_note(rel: &str, mtime_ns: u64, text: &str) -> Note {
     let id = rel[..rel.len() - 3].to_string();
     let (mut fm, body) = parse_frontmatter(text);
-    let no_fence = fence_re().replace_all(body, "");
-    let stripped = inline_code_re().replace_all(&no_fence, "").into_owned();
+    let no_fence = fence_fast().replace_all(body, "");
+    let stripped = inline_code_fast().replace_all(&no_fence, "").into_owned();
     let mut tags = HashSet::new();
     for k in ["tags", "tag"] {
         for t in value_list(fm.get(k)) {
@@ -186,7 +218,7 @@ pub fn parse_note(rel: &str, mtime_ns: u64, text: &str) -> Note {
             }
         }
     }
-    for c in tag_re().captures_iter(stripped.as_str()).flatten() {
+    for c in captures_not_after(tag_fast(), &stripped, |p| tag_before().is_match(p)) {
         tags.insert(c[1].to_string());
     }
     let mut tags: Vec<String> = tags.into_iter().collect();
@@ -205,18 +237,12 @@ pub fn parse_note(rel: &str, mtime_ns: u64, text: &str) -> Note {
         content,
         mtime: mtime_ns / 1_000_000_000,
         rev: mtime_ns.to_string(), // exact change marker for the browser's content cache (a string: ns overflow JS numbers)
-        words: word_re().find_iter(body).count(),
+        words: word_fast().find_iter(body).count(),
         tags,
         props: fm,
-        wiki: wiki_re()
-            .captures_iter(stripped.as_str())
-            .flatten()
-            .map(|c| c[2].trim().to_string())
-            .filter(|t| !t.is_empty())
-            .collect(),
-        mdl: mdlink_re()
-            .captures_iter(stripped.as_str())
-            .flatten()
+        wiki: wiki_fast().captures_iter(&stripped).map(|c| c[2].trim().to_string()).filter(|t| !t.is_empty()).collect(),
+        mdl: captures_not_after(mdlink_fast(), &stripped, |p| p == "!")
+            .into_iter()
             .map(|c| c.get(1).or(c.get(2)).unwrap().as_str().to_string())
             .collect(),
         id,
@@ -310,6 +336,112 @@ pub fn walk_vault(vault: &Path) -> (Vec<MdFile>, Vec<String>) {
     (md, media)
 }
 
+/// Read and parse `md[i]` for each i in `todo` on all cores. `progress(n)` is called on this thread
+/// with the number parsed so far. Unreadable files map to None.
+fn parse_files(md: &[MdFile], todo: &[usize], progress: &dyn Fn(usize)) -> HashMap<usize, Option<Arc<Note>>> {
+    let parse = |i: usize| {
+        let f = &md[i];
+        let bytes = read_known(&f.path, f.size).ok()?;
+        Some(Arc::new(parse_note(&f.rel, f.mtime_ns, &normalize_newlines(&String::from_utf8_lossy(&bytes)))))
+    };
+    if todo.len() < 64 {
+        return todo.iter().map(|&i| (i, parse(i))).collect();
+    }
+    let threads = std::thread::available_parallelism().map_or(4, |n| n.get()).clamp(1, 16);
+    let (next, done) = (AtomicUsize::new(0), AtomicUsize::new(0));
+    std::thread::scope(|s| {
+        let workers: Vec<_> = (0..threads)
+            .map(|_| {
+                s.spawn(|| {
+                    let mut out = vec![];
+                    loop {
+                        let k = next.fetch_add(1, Ordering::Relaxed);
+                        let Some(&i) = todo.get(k) else { break out };
+                        out.push((i, parse(i)));
+                        done.fetch_add(1, Ordering::Relaxed);
+                    }
+                })
+            })
+            .collect();
+        while !workers.iter().all(|w| w.is_finished()) {
+            progress(done.load(Ordering::Relaxed));
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        workers.into_iter().flat_map(|w| w.join().unwrap()).collect()
+    })
+}
+
+/// `f` over `items` on all cores, results in input order. Small inputs stay on this thread.
+fn map_parallel<T: Sync, R: Send>(items: &[T], f: impl Fn(&T) -> R + Sync) -> Vec<R> {
+    let threads = std::thread::available_parallelism().map_or(4, |n| n.get()).clamp(1, 16);
+    if items.len() < 256 || threads == 1 {
+        return items.iter().map(f).collect();
+    }
+    let chunk = items.len().div_ceil(threads * 4); // a few chunks per thread evens out the load
+    let next = AtomicUsize::new(0);
+    let chunks: Vec<&[T]> = items.chunks(chunk).collect();
+    let mut parts: Vec<(usize, Vec<R>)> = std::thread::scope(|s| {
+        let workers: Vec<_> = (0..threads)
+            .map(|_| {
+                s.spawn(|| {
+                    let mut out = vec![];
+                    loop {
+                        let k = next.fetch_add(1, Ordering::Relaxed);
+                        let Some(c) = chunks.get(k) else { break out };
+                        out.push((k, c.iter().map(&f).collect::<Vec<R>>()));
+                    }
+                })
+            })
+            .collect();
+        workers.into_iter().flat_map(|w| w.join().unwrap()).collect()
+    });
+    parts.sort_unstable_by_key(|(k, _)| *k);
+    parts.into_iter().flat_map(|(_, v)| v).collect()
+}
+
+/// One note's entry for the browser, plus the link targets that resolve to nothing (in order).
+fn resolve_links(p: &Note, lookup: &Map<String, Value>) -> (Value, Vec<String>) {
+    let get = |k: &str| lookup.get(k).and_then(|v| v.as_str()).map(str::to_string);
+    let (mut links, mut missing_out, mut seen) = (vec![], vec![], HashSet::new());
+    let mut link = |dest: Option<String>, missing: Option<String>| {
+        if let Some(d) = dest {
+            if d != p.id && seen.insert(d.clone()) {
+                links.push(d);
+            }
+        } else if let Some(m) = missing.filter(|m| !m.is_empty()) {
+            missing_out.push(m);
+        }
+    };
+    for target in &p.wiki {
+        let key = strip_md_suffix(target).to_lowercase();
+        let ext = key.rsplit_once('.').map(|(_, x)| x).unwrap_or("");
+        let missing = if is_asset_ext(ext) { None } else { Some(target.clone()) };
+        link(get(&key), missing);
+    }
+    for raw in &p.mdl {
+        if scheme_re().is_match(raw).unwrap_or(false) {
+            continue; // http:, mailto:, ... never resolve and are never "missing"
+        }
+        let base = unquote(raw);
+        let base = base.rsplit('/').next().unwrap_or("");
+        let missing: String = base.chars().take(base.chars().count().saturating_sub(3)).collect();
+        link(resolve_md(raw, &p.id, lookup), Some(missing));
+    }
+    let note = json!({
+        "id": p.id, "title": p.title, "folder": p.folder, "mtime": p.mtime, "rev": p.rev,
+        "words": p.words, "tags": p.tags, "props": p.props, "links": links,
+    });
+    (note, missing_out)
+}
+
+/// Read a whole file whose size is already known from the walk: skips the size query `fs::read` makes.
+fn read_known(path: &Path, size: u64) -> std::io::Result<Vec<u8>> {
+    use std::io::Read;
+    let mut buf = Vec::with_capacity(size as usize + 1);
+    fs::File::open(path)?.read_to_end(&mut buf)?;
+    Ok(buf)
+}
+
 /// The resolved vault: what the browser gets (without note content), plus the link lookup.
 #[derive(Debug)]
 pub struct Resolved {
@@ -381,6 +513,11 @@ impl VaultIndex {
 
     /// Current index. Without `force`, a walk happens at most every MIN_RECHECK (or after invalidate).
     pub fn build(&self, force: bool) -> Arc<Resolved> {
+        self.build_with_progress(force, &|_, _| {})
+    }
+
+    /// [`build`](Self::build), calling `progress(done, total)` while note files are read.
+    pub fn build_with_progress(&self, force: bool, progress: &dyn Fn(usize, usize)) -> Arc<Resolved> {
         let mut g = self.inner.lock().unwrap();
         if let (false, Some(r), false, Some(t)) = (force, &g.result, g.stale, g.checked) {
             if t.elapsed() < MIN_RECHECK {
@@ -397,22 +534,24 @@ impl VaultIndex {
                 return r.clone();
             }
         }
+        let unchanged = |f: &MdFile| g.files.get(&f.rel).filter(|o| o.0 == f.mtime_ns && o.1 == f.size).cloned();
+        let todo: Vec<usize> = (0..md.len()).filter(|&i| unchanged(&md[i]).is_none()).collect();
+        let parsed = parse_files(&md, &todo, &|n| progress(md.len() - todo.len() + n, md.len()));
         let mut files = HashMap::new();
         let mut notes = vec![];
-        for f in &md {
-            if let Some(old) = g.files.get(&f.rel) {
-                if old.0 == f.mtime_ns && old.1 == f.size {
-                    notes.push(old.2.clone());
-                    files.insert(f.rel.clone(), old.clone());
-                    continue;
-                }
-            }
-            let Ok(bytes) = fs::read(&f.path) else { continue };
-            let text = normalize_newlines(&String::from_utf8_lossy(&bytes));
-            let n = Arc::new(parse_note(&f.rel, f.mtime_ns, &text));
-            notes.push(n.clone());
-            files.insert(f.rel.clone(), (f.mtime_ns, f.size, n));
+        for (i, f) in md.iter().enumerate() {
+            let entry = match parsed.get(&i) {
+                Some(Some(n)) => (f.mtime_ns, f.size, n.clone()),
+                Some(None) => continue, // unreadable
+                None => match unchanged(f) {
+                    Some(old) => old,
+                    None => continue,
+                },
+            };
+            notes.push(entry.2.clone());
+            files.insert(f.rel.clone(), entry);
         }
+        progress(md.len(), md.len());
         g.by_id = notes.iter().enumerate().map(|(i, n)| (n.id.clone(), i)).collect();
         g.files = files;
         let res = Arc::new(self.resolve(&notes, &media));
@@ -425,8 +564,9 @@ impl VaultIndex {
     }
 
     fn resolve(&self, parsed: &[Arc<Note>], media: &[String]) -> Resolved {
-        let mut by_depth: Vec<&Arc<Note>> = parsed.iter().collect();
-        by_depth.sort_by(|a, b| (a.id.matches('/').count(), &a.id).cmp(&(b.id.matches('/').count(), &b.id)));
+        let mut by_depth: Vec<(usize, &Arc<Note>)> = parsed.iter().map(|p| (p.id.matches('/').count(), p)).collect();
+        by_depth.sort_unstable_by(|a, b| (a.0, &a.1.id).cmp(&(b.0, &b.1.id)));
+        let by_depth: Vec<&Arc<Note>> = by_depth.into_iter().map(|(_, p)| p).collect();
         let mut lookup = Map::new();
         for p in &by_depth {
             let parts: Vec<&str> = p.id.split('/').collect();
@@ -435,50 +575,25 @@ impl VaultIndex {
             }
         }
         let mut by_id: Vec<&Arc<Note>> = parsed.iter().collect();
-        by_id.sort_by(|a, b| a.id.cmp(&b.id));
+        by_id.sort_unstable_by(|a, b| a.id.cmp(&b.id));
         for p in &by_id {
             // aliases come last: real note names win
             for a in p.aliases() {
                 lookup.entry(a.to_lowercase()).or_insert_with(|| Value::String(p.id.clone()));
             }
         }
-        let get = |k: &str| lookup.get(k).and_then(|v| v.as_str()).map(str::to_string);
+        // each note's links resolve independently: do it on all cores, then merge in note order
+        let per_note = map_parallel(&by_id, |p| resolve_links(p, &lookup));
         let mut unresolved: std::collections::BTreeMap<String, Vec<String>> = Default::default();
-        let mut notes = vec![];
-        for p in &by_id {
-            let mut links: Vec<String> = vec![];
-            let mut seen = HashSet::new();
-            let mut link = |dest: Option<String>, missing: Option<String>| {
-                if let Some(d) = dest {
-                    if d != p.id && seen.insert(d.clone()) {
-                        links.push(d);
-                    }
-                } else if let Some(m) = missing.filter(|m| !m.is_empty()) {
-                    let src = unresolved.entry(m).or_default();
-                    if src.last() != Some(&p.id) {
-                        src.push(p.id.clone());
-                    }
+        let mut notes = Vec::with_capacity(per_note.len());
+        for (p, (note, missing)) in by_id.iter().zip(per_note) {
+            for m in missing {
+                let src = unresolved.entry(m).or_default();
+                if src.last() != Some(&p.id) {
+                    src.push(p.id.clone());
                 }
-            };
-            for target in &p.wiki {
-                let key = strip_md_suffix(target).to_lowercase();
-                let ext = key.rsplit_once('.').map(|(_, x)| x).unwrap_or("");
-                let missing = if is_asset_ext(ext) { None } else { Some(target.clone()) };
-                link(get(&key), missing);
             }
-            for raw in &p.mdl {
-                if scheme_re().is_match(raw).unwrap_or(false) {
-                    continue; // http:, mailto:, ... never resolve and are never "missing"
-                }
-                let base = unquote(raw);
-                let base = base.rsplit('/').next().unwrap_or("");
-                let missing: String = base.chars().take(base.chars().count().saturating_sub(3)).collect();
-                link(resolve_md(raw, &p.id, &lookup), Some(missing));
-            }
-            notes.push(json!({
-                "id": p.id, "title": p.title, "folder": p.folder, "mtime": p.mtime, "rev": p.rev,
-                "words": p.words, "tags": p.tags, "props": p.props, "links": links,
-            }));
+            notes.push(note);
         }
         let mut media_sorted: Vec<&String> = media.iter().collect();
         media_sorted.sort_by(|a, b| (a.matches('/').count(), a).cmp(&(b.matches('/').count(), b)));
