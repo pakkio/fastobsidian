@@ -465,3 +465,26 @@ fn index_cache_round_trips_exactly() {
     fs::write(&file, bytes).unwrap();
     assert!(cache::load(&file, &v).is_none());
 }
+
+#[test]
+fn parallel_json_matches_serde() {
+    let mut files: Vec<(String, String)> = (0..1500)
+        .map(|i| {
+            (
+                format!("f{}/n{i}.md", i % 7),
+                format!(
+                    "---\ntags: [t{}]\nalias: A{i}\n---\n# N{i}\n[[n{}]] [x](n{}.md) #k{} [[gone{i}]]\n",
+                    i % 5,
+                    i + 1,
+                    i + 2,
+                    i % 3
+                ),
+            )
+        })
+        .collect();
+    files.push(("img.png".into(), "png".into()));
+    let refs: Vec<(&str, &str)> = files.iter().map(|(a, b)| (a.as_str(), b.as_str())).collect();
+    let v = make_vault(&refs);
+    let res = VaultIndex::new(&v).build(true);
+    assert_eq!(res.to_json_string(), res.to_json().to_string());
+}

@@ -99,9 +99,10 @@ pub fn render(vault: &Path, live: bool, data: &str, theme: bool, native: bool) -
         .into_owned()
 }
 
-/// Page for the live server / app window.
+/// Page for the live server / app window. The vault data is not embedded: the page fetches /api/data, so the
+/// page itself loads (and its script compiles) while the data is still being prepared.
 pub fn live_page(idx: &VaultIndex, theme: bool, native: bool) -> String {
-    render(&idx.vault, true, &idx.json(), theme, native)
+    render(&idx.vault, true, "", theme, native)
 }
 
 /// Self-contained read-only page with all note content embedded.

@@ -256,7 +256,10 @@ body.obs{--bg:var(--background-primary);--bgs:var(--background-primary);--side:v
 <script type="application/json" id="data">/*__DATA__*/</script>
 <script>
 "use strict";
-let D = JSON.parse(document.getElementById('data').textContent);
+const RAW = document.getElementById('data').textContent.trim();
+// the static page embeds the vault data; the live page fetches it, so the page loads while the server prepares it
+const BOOT = RAW ? Promise.resolve(JSON.parse(RAW)) : fetch('/api/data').then(r => r.json());
+let D = null;
 const LIVE = !!window.LIVE;
 const $ = s => document.querySelector(s);
 const el = (t, c, h) => { const e = document.createElement(t); if (c) e.className = c; if (h != null) e.innerHTML = h; return e; };
@@ -287,7 +290,6 @@ function ingest(d) {
   notes.forEach(n => n.tags.forEach(t => allTags.set(t, (allTags.get(t) || 0) + 1)));
   folders = [...new Set(notes.map(topFolder))].sort();
 }
-ingest(D);
 const CC = new Map();                                   // live mode: "id@rev" -> content (rev = exact file mtime)
 const hasContent = n => typeof n.content === 'string';
 const ckey = n => n.id + '@' + (n.rev || n.mtime);
@@ -466,13 +468,17 @@ function tree(list) {
 function renderTree(node, parent, open) {
   Object.keys(node.dirs).sort().forEach(k => {
     const d = el('details'); d.open = open; d.appendChild(el('summary', '', esc(k)));
-    const kids = el('div', 'kids'); renderTree(node.dirs[k], kids, open); d.appendChild(kids); parent.appendChild(d);
+    const kids = el('div', 'kids'); d.appendChild(kids); parent.appendChild(d);
+    // a closed folder builds its contents when first opened: a big vault starts with a few dozen nodes, not 40,000
+    if (open) renderTree(node.dirs[k], kids, open);
+    else d.addEventListener('toggle', () => { if (d.open && !kids.childElementCount) renderTree(node.dirs[k], kids, false); });
   });
   node.files.sort((a, b) => a.title.localeCompare(b.title)).forEach(n => {
-    const a = el('a', 'file', esc(n.title)); a.href = noteHref(n.id); a.dataset.id = n.id; parent.appendChild(a);
+    const a = el('a', 'file' + (n.id === curNote ? ' on' : ''), esc(n.title)); a.href = noteHref(n.id); a.dataset.id = n.id; parent.appendChild(a);
   });
 }
 function refreshSide() {
+  if (!notes) return;
   list.innerHTML = '';
   const q = query.trim().toLowerCase();
   let pool = tagFilter ? notes.filter(n => n.tags.includes(tagFilter)) : notes;
@@ -579,6 +585,7 @@ function spy() {
 }
 document.getElementById('v-note').addEventListener('scroll', spy);
 function route() {
+  if (!notes) return;   // the data is still loading; boot routes when it arrives
   const h = location.hash.slice(1);
   if (ED.dirty && !h.startsWith('e/') && h !== 'new' && !confirm('Discard unsaved changes?')) { location.hash = ED.hash; return; }
   if (LIVE && (h.startsWith('e/') || h === 'new')) return openEditor(h === 'new' ? null : decodeURIComponent(h.slice(2)));
@@ -997,6 +1004,7 @@ async function api(method, url, body) {
   return j;
 }
 async function reload() {
+  await BOOT.catch(() => {});
   ingest(await api('GET', '/api/data'));
   drawLegend(); refreshSide(); renderIndex(); G.dirty = true;
 }
@@ -1071,6 +1079,7 @@ async function changeVault() {
 }
 /* ---------- live refresh: the server pushes `change` when the vault changes on disk (e.g. edited in Obsidian) ---------- */
 async function liveRefresh() {
+  await BOOT;
   const view = (document.querySelector('.view.active') || {}).id;
   if (view === 'v-edit' && ED.dirty) {      // never touch unsaved text: just warn (the save would be refused anyway)
     if (ED.id && !ED.isNew) {
@@ -1414,6 +1423,7 @@ if (LIVE) {
   /* ---------- today's daily note ---------- */
   async function openToday() {
     try {
+      await BOOT;
       const r = await api('POST', '/api/daily');
       if (r.created) await reload();
       location.hash = 'e/' + encodeURIComponent(r.id);
@@ -1437,9 +1447,17 @@ document.addEventListener('fullscreenchange', () => { if (!document.fullscreenEl
 { const sv = showView; showView = v => { if (v !== 'note') setFocus(false); sv(v); }; }
 
 /* ---------- boot ---------- */
-$('#vname').textContent = D.vault;
-document.title = D.vault + ' · Vault Explorer';
-drawLegend(); refreshSide(); renderIndex(); route();
+BOOT.then(d => {
+  ingest(d);
+  $('#vname').textContent = D.vault;
+  document.title = D.vault + ' · Vault Explorer';
+  drawLegend(); refreshSide(); renderIndex(); route();
+}).catch(e => {
+  document.body.insertAdjacentHTML('afterbegin', '<p style="padding:20px">Could not load the vault: ' + esc(e.message) + '</p>');
+}).finally(() => {
+  // the app window stays hidden until the page has drawn its first screen
+  if (window.NATIVE && window.ipc) window.ipc.postMessage('app:ready');
+});
 </script>
 </body>
 </html>

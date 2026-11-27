@@ -11,7 +11,7 @@ use tao::dpi::{LogicalSize, PhysicalPosition, PhysicalSize};
 use tao::event::{Event, WindowEvent};
 use tao::event_loop::{ControlFlow, EventLoopBuilder, EventLoopProxy};
 use tao::window::{Icon, Window, WindowBuilder};
-use wry::{NewWindowResponse, PageLoadEvent, WebContext, WebViewBuilder};
+use wry::{NewWindowResponse, WebContext, WebViewBuilder};
 
 /// Fixed so the page's origin, and with it the remembered light/dark choice, stays the same between launches.
 const PREFERRED_PORT: u16 = 47615;
@@ -58,16 +58,25 @@ enum UserEvent {
     Ready(String),
     /// loading is taking a while: show the splash (ignored once the app is up)
     ShowSplash,
-    /// a page finished loading in the webview
-    PageLoaded(String),
+    /// the app page has drawn its first screen
+    AppReady,
     /// show the window whatever it holds (fallback if no page-load event arrives)
     Show,
 }
 
 /// Loads faster than this never show the splash, so a quick start does not flash it.
-const SPLASH_DELAY: Duration = Duration::from_millis(300);
+const SPLASH_DELAY: Duration = Duration::from_millis(600);
 /// Show the app window even if its page has not reported loading by then.
 const SHOW_FALLBACK: Duration = Duration::from_secs(2);
+
+/// With FO_TIMING set, print how long after start-up each phase finished (to stderr).
+pub fn mark(phase: &str) {
+    static T0: OnceLock<std::time::Instant> = OnceLock::new();
+    let t0 = T0.get_or_init(std::time::Instant::now);
+    if std::env::var_os("FO_TIMING").is_some() {
+        eprintln!("timing {:>7.1} ms  {phase}", t0.elapsed().as_secs_f64() * 1000.0);
+    }
+}
 
 /// Turn the (hidden or splash) window into the full app window, once.
 fn show_app(window: &Window, done: &mut bool) {
@@ -80,6 +89,7 @@ fn show_app(window: &Window, done: &mut bool) {
     center(window, APP_SIZE);
     window.set_visible(true);
     window.set_focus();
+    mark("app window shown");
 }
 
 fn send_after(proxy: &EventLoopProxy<UserEvent>, delay: Duration, ev: UserEvent) {
@@ -196,6 +206,7 @@ fn start(vault: PathBuf, theme: bool, watch: f64, cache: bool, proxy: EventLoopP
             return say(format!("fail({})", js(&format!("cannot start the local server: {e}"))));
         }
     };
+    mark("vault indexed, server listening");
     let indexed = format!("{} indexed in {:.1}s", plural(server.note_count(), "note"), t0.elapsed().as_secs_f64());
     step("vault", &indexed, "ok");
 
@@ -217,18 +228,40 @@ fn start(vault: PathBuf, theme: bool, watch: f64, cache: bool, proxy: EventLoopP
     }
 
     let url = server.url();
-    let _ = started.set((url.clone(), server.spawn()));
+    let handle = server.spawn();
+    {
+        // serialize the vault data while the web view loads the page, which then asks for it
+        let h = handle.clone();
+        std::thread::spawn(move || {
+            h.warm();
+            mark("vault data ready");
+        });
+    }
+    let _ = started.set((url.clone(), handle));
     say("done()".into());
     let _ = proxy.send_event(UserEvent::Ready(url));
 }
 
 pub fn run(vault: Option<PathBuf>, theme: bool, watch: f64, cache: bool) -> Result<(), String> {
     let event_loop = EventLoopBuilder::<UserEvent>::with_user_event().build();
+    mark("event loop ready");
     let proxy = event_loop.create_proxy();
     let vault = match vault {
         Some(v) => v,
         None => rfd::FileDialog::new().set_title("Open an Obsidian vault").pick_folder().ok_or("no folder chosen")?,
     };
+
+    let started: Started = Arc::default();
+    // index the vault from the start, while the window and web view are created: the two do not depend on each other, and creating a web view
+    // can take a while (or, with a broken WebKitGTK sandbox, never finish)
+    {
+        let (v, p, s) = (vault.clone(), proxy.clone(), started.clone());
+        std::thread::Builder::new()
+            .name("startup".into())
+            .spawn(move || start(v, theme, watch, cache, p, s))
+            .map_err(|e| e.to_string())?;
+    }
+    send_after(&proxy, SPLASH_DELAY, UserEvent::ShowSplash);
 
     // starts hidden, as a small borderless splash that appears only if loading is slow;
     // grows into the app window once the vault is loaded
@@ -242,21 +275,11 @@ pub fn run(vault: Option<PathBuf>, theme: bool, watch: f64, cache: bool) -> Resu
         .build(&event_loop)
         .map_err(|e| e.to_string())?;
     center(&window, SPLASH_SIZE);
+    mark("window created");
 
-    let started: Started = Arc::default();
-    // index the vault while the web view starts: the two do not depend on each other, and creating a web view
-    // can take a while (or, with a broken WebKitGTK sandbox, never finish)
-    {
-        let (v, p, s) = (vault.clone(), proxy.clone(), started.clone());
-        std::thread::Builder::new()
-            .name("startup".into())
-            .spawn(move || start(v, theme, watch, cache, p, s))
-            .map_err(|e| e.to_string())?;
-    }
-    send_after(&proxy, SPLASH_DELAY, UserEvent::ShowSplash);
     let mut context = WebContext::new(Some(data_dir()));
     let (st1, st2) = (started.clone(), started.clone());
-    let (p_ipc, p_title, p_load) = (proxy.clone(), proxy.clone(), proxy.clone());
+    let (p_ipc, p_title) = (proxy.clone(), proxy.clone());
     let splash = SPLASH
         .replace("__TITLE__", &html_escape(&vault_title(&vault)))
         .replace("__PATH__", &html_escape(&vault.display().to_string()).replace('"', "&quot;"))
@@ -291,17 +314,14 @@ pub fn run(vault: Option<PathBuf>, theme: bool, watch: f64, cache: bool) -> Resu
                 let _ = p_ipc.send_event(UserEvent::CloseAnswer { dirty: state == "dirty" });
             } else if body == "splash:ready" {
                 let _ = p_ipc.send_event(UserEvent::SplashReady);
+            } else if body == "app:ready" {
+                let _ = p_ipc.send_event(UserEvent::AppReady);
             } else if body == "splash:close" {
                 let _ = p_ipc.send_event(UserEvent::CloseAnswer { dirty: false });
             }
         })
         .with_document_title_changed_handler(move |t| {
             let _ = p_title.send_event(UserEvent::Title(t));
-        })
-        .with_on_page_load_handler(move |ev, url| {
-            if matches!(ev, PageLoadEvent::Finished) {
-                let _ = p_load.send_event(UserEvent::PageLoaded(url));
-            }
         });
 
     #[cfg(any(windows, target_os = "macos"))]
@@ -312,6 +332,7 @@ pub fn run(vault: Option<PathBuf>, theme: bool, watch: f64, cache: bool) -> Resu
         use wry::WebViewBuilderExtUnix;
         builder.build_gtk(window.default_vbox().unwrap()).map_err(|e| e.to_string())?
     };
+    mark("web view created");
 
     // splash scripts that arrive before the splash page has loaded wait here
     let mut pending: Option<Vec<String>> = Some(vec![]);
@@ -348,14 +369,15 @@ pub fn run(vault: Option<PathBuf>, theme: bool, watch: f64, cache: bool) -> Resu
             Event::UserEvent(UserEvent::Ready(url)) => {
                 app_shown = true;
                 let _ = webview.load_url(&url);
-                // a visible splash stays as it is until the app page has loaded
+                // a visible splash stays as it is until the app page has drawn itself
                 send_after(&proxy, SHOW_FALLBACK, UserEvent::Show);
             }
             Event::UserEvent(UserEvent::ShowSplash) if !app_shown => {
                 window.set_visible(true);
                 window.set_focus(); // a window shown later must come to the front itself
             }
-            Event::UserEvent(UserEvent::PageLoaded(url)) if app_shown && url.starts_with("http://127.0.0.1:") => {
+            Event::UserEvent(UserEvent::AppReady) if app_shown => {
+                mark("app page drawn");
                 show_app(&window, &mut app_visible)
             }
             Event::UserEvent(UserEvent::Show) if app_shown => show_app(&window, &mut app_visible),

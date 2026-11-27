@@ -85,6 +85,7 @@ fn hide_own_console() {
 }
 
 fn main() -> ExitCode {
+    gui::mark("start");
     let a = match parse_args() {
         Ok(a) => a,
         Err(e) => {

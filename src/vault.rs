@@ -463,6 +463,36 @@ impl Resolved {
         })
     }
 
+    /// `to_json().to_string()`, byte for byte, but the notes (most of the 7 MB on a 40,000-note vault) are
+    /// serialized on all cores.
+    pub fn to_json_string(&self) -> String {
+        let chunks: Vec<&[Value]> = self.notes.chunks(512).collect();
+        let parts = map_parallel(&chunks, |c| c.iter().map(|n| n.to_string()).collect::<Vec<_>>().join(","));
+        let unresolved: Vec<Value> =
+            self.unresolved.iter().map(|(t, src)| json!({"target": t, "sources": src})).collect();
+        let s = |r: serde_json::Result<String>| r.unwrap_or_else(|_| "null".into());
+        let mut out = String::with_capacity(parts.iter().map(String::len).sum::<usize>() + (1 << 20));
+        out.push_str("{\"vault\":");
+        out.push_str(&s(serde_json::to_string(&self.vault_name)));
+        out.push_str(",\"generated\":");
+        out.push_str(&s(serde_json::to_string(&self.generated)));
+        out.push_str(",\"notes\":[");
+        for (i, p) in parts.iter().filter(|p| !p.is_empty()).enumerate() {
+            if i > 0 {
+                out.push(',');
+            }
+            out.push_str(p);
+        }
+        out.push_str("],\"lookup\":");
+        out.push_str(&s(serde_json::to_string(&self.lookup)));
+        out.push_str(",\"assets\":");
+        out.push_str(&s(serde_json::to_string(&self.assets)));
+        out.push_str(",\"unresolved\":");
+        out.push_str(&s(serde_json::to_string(&unresolved)));
+        out.push('}');
+        out
+    }
+
     pub fn note_ids(&self) -> impl Iterator<Item = &str> {
         self.notes.iter().filter_map(|n| n["id"].as_str())
     }
@@ -499,6 +529,8 @@ pub struct VaultIndex {
     cache: Option<PathBuf>,
     inner: Mutex<Inner>,
     version: AtomicUsize,
+    /// held while the JSON is serialized, so concurrent requests wait for one result instead of each making it
+    json_lock: Mutex<()>,
 }
 
 pub const MIN_RECHECK: Duration = Duration::from_secs(2);
@@ -510,6 +542,7 @@ impl VaultIndex {
             cache: None,
             inner: Mutex::new(Inner { stale: true, ..Default::default() }),
             version: AtomicUsize::new(0),
+            json_lock: Mutex::new(()),
         }
     }
 
@@ -607,19 +640,25 @@ impl VaultIndex {
         let mut by_depth: Vec<(usize, &Arc<Note>)> = parsed.iter().map(|p| (p.id.matches('/').count(), p)).collect();
         by_depth.sort_unstable_by(|a, b| (a.0, &a.1.id).cmp(&(b.0, &b.1.id)));
         let by_depth: Vec<&Arc<Note>> = by_depth.into_iter().map(|(_, p)| p).collect();
-        let mut lookup = Map::new();
-        for p in &by_depth {
+        // the keys (every path suffix, lowercased; then aliases) are computed on all cores; only the inserts are
+        // sequential, in the same order, so the first note to claim a key still wins
+        let suffixes = map_parallel(&by_depth, |p| {
             let parts: Vec<&str> = p.id.split('/').collect();
-            for i in 0..parts.len() {
-                lookup.entry(parts[i..].join("/").to_lowercase()).or_insert_with(|| Value::String(p.id.clone()));
+            (0..parts.len()).map(|i| parts[i..].join("/").to_lowercase()).collect::<Vec<_>>()
+        });
+        let mut lookup = Map::new();
+        for (p, keys) in by_depth.iter().zip(suffixes) {
+            for k in keys {
+                lookup.entry(k).or_insert_with(|| Value::String(p.id.clone()));
             }
         }
         let mut by_id: Vec<&Arc<Note>> = parsed.iter().collect();
         by_id.sort_unstable_by(|a, b| a.id.cmp(&b.id));
-        for p in &by_id {
+        let aliases = map_parallel(&by_id, |p| p.aliases().into_iter().map(|a| a.to_lowercase()).collect::<Vec<_>>());
+        for (p, keys) in by_id.iter().zip(aliases) {
             // aliases come last: real note names win
-            for a in p.aliases() {
-                lookup.entry(a.to_lowercase()).or_insert_with(|| Value::String(p.id.clone()));
+            for k in keys {
+                lookup.entry(k).or_insert_with(|| Value::String(p.id.clone()));
             }
         }
         // each note's links resolve independently: do it on all cores, then merge in note order
@@ -657,14 +696,18 @@ impl VaultIndex {
 
     /// Serialized result, cached until the vault changes.
     pub fn json(&self) -> Arc<String> {
+        let _one_at_a_time = self.json_lock.lock().unwrap_or_else(|e| e.into_inner());
         let res = self.build(false);
-        let mut g = self.inner.lock().unwrap();
-        if let (Some(j), Some(r)) = (&g.json, &g.result) {
-            if Arc::ptr_eq(r, &res) {
-                return j.clone();
+        {
+            let g = self.inner.lock().unwrap();
+            if let (Some(j), Some(r)) = (&g.json, &g.result) {
+                if Arc::ptr_eq(r, &res) {
+                    return j.clone();
+                }
             }
         }
-        let j = Arc::new(res.to_json().to_string());
+        let j = Arc::new(res.to_json_string());
+        let mut g = self.inner.lock().unwrap();
         if g.result.as_ref().is_some_and(|r| Arc::ptr_eq(r, &res)) {
             g.json = Some(j.clone());
         }

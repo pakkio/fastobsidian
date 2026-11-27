@@ -117,6 +117,12 @@ impl ServerHandle {
     pub fn vault(&self) -> PathBuf {
         self.shared.current.read().unwrap().0.clone()
     }
+
+    /// Prepare the vault JSON now, so the page's /api/data request finds it ready.
+    pub fn warm(&self) {
+        let idx = self.shared.current.read().unwrap().1.clone();
+        idx.json();
+    }
 }
 
 /// Re-check the vault while at least one page listens on /api/events; announce every change.
