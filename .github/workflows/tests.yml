@@ -29,27 +29,3 @@ jobs:
         run: cargo test --locked
       - name: Static build of the sample vault
         run: cargo run --locked -- sample-vault -o explorer.html
-
-  python:
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
-        python: ["3.13"]
-        include:
-          - os: ubuntu-24.04   # oldest supported version; setup-python has no 3.9 for Ubuntu 26.04
-            python: "3.9"
-          - os: windows-latest
-            python: "3.9"
-    runs-on: ${{ matrix.os }}
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: ${{ matrix.python }}
-      - name: Compile
-        run: python -m py_compile obsidian_explorer.py
-      - name: Unit tests
-        run: python -m unittest discover -s tests -v
-      - name: Static build of the sample vault
-        run: python obsidian_explorer.py sample-vault -o explorer.html

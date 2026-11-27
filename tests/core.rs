@@ -1,4 +1,4 @@
-//! Same checks as tests/test_explorer.py, against the Rust code.
+//! Index, parsing, note operations, the local server and the MCP server.
 use fastobsidian::ops::{self, note_path, read_note, rename_note, save_note, trash_note, Error};
 use fastobsidian::server::{Options, Server};
 use fastobsidian::vault::VaultIndex;
@@ -148,7 +148,7 @@ fn moved_note_keeps_its_own_relative_links_working() {
 }
 
 #[test]
-fn relpath_matches_python() {
+fn relpath_like_posix() {
     assert_eq!(ops::relpath("C/moved", "A"), "../C/moved");
     assert_eq!(ops::relpath("A/x", "A"), "x");
     assert_eq!(ops::relpath("x", ""), "x");

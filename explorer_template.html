@@ -252,7 +252,7 @@ body.obs{--bg:var(--background-primary);--bgs:var(--background-primary);--side:v
     <div class="view" id="v-note"><div class="pad note" id="noteBody"></div></div>
   </section>
 </div>
-<script>window.LIVE=/*__LIVE__*/false;window.OBS=/*__OBS__*/null;window.NATIVE=/*__NATIVE__*/false;window.EXTRAS=/*__EXTRAS__*/false;</script>
+<script>window.LIVE=/*__LIVE__*/false;window.OBS=/*__OBS__*/null;window.NATIVE=/*__NATIVE__*/false;</script>
 <script type="application/json" id="data">/*__DATA__*/</script>
 <script>
 "use strict";
@@ -1172,7 +1172,7 @@ if (LIVE) {
    ['☐ task', () => linePrefix('- [ ] ')], ['[[link]]', () => wrap('[[', ']]', 'note')], ['code', () => wrap('`', '`', 'code')],
    ['block', () => wrap('```\n', '\n```', '')], ['#tag', () => wrap('#', '', 'tag')]
   ].forEach(([l, f]) => { const b = el('button', '', l); b.type = 'button'; b.onclick = f; $('#tb').appendChild(b); });
-  const imgBtn = el('button', '', '&#128444; image'); if (!window.EXTRAS) imgBtn.style.display = 'none'; imgBtn.type = 'button'; imgBtn.title = 'Insert images (or paste / drop them)';
+  const imgBtn = el('button', '', '&#128444; image'); imgBtn.type = 'button'; imgBtn.title = 'Insert images (or paste / drop them)';
   imgBtn.onclick = () => $('#imgpick').click(); $('#tb').appendChild(imgBtn);
   $('#tb').appendChild(el('span', 'sp'));
   const modeBtn = el('button'); modeBtn.type = 'button'; $('#tb').appendChild(modeBtn);
@@ -1314,7 +1314,6 @@ if (LIVE) {
   const MEDIA = /\.(png|jpe?g|gif|svg|webp|bmp|pdf|mp3|mp4|wav|ogg|webm|mov|m4a)$/i;
   const stamp = () => { const d = new Date(), z = n => String(n).padStart(2, '0'); return d.getFullYear() + z(d.getMonth() + 1) + z(d.getDate()) + z(d.getHours()) + z(d.getMinutes()) + z(d.getSeconds()); };
   async function insertFiles(files) {
-    if (!window.EXTRAS) return;   // the server cannot store attachments (Python version)
     const list = [...files].filter(f => MEDIA.test(f.name) || /^(image|video|audio)\//.test(f.type));
     if (!list.length) return;
     const t = ta, s = t.selectionStart, e = t.selectionEnd;
@@ -1356,8 +1355,8 @@ if (LIVE) {
       location.hash = 'e/' + encodeURIComponent(r.id);
     } catch (e) { alert(e.message); }
   }
-  if (window.EXTRAS) { $('#todaybtn').style.display = ''; $('#todaybtn').onclick = openToday; }
-  if (window.EXTRAS) document.addEventListener('keydown', e => { if (e.altKey && !e.ctrlKey && !e.metaKey && e.key.toLowerCase() === 'd') { e.preventDefault(); openToday(); } });
+  $('#todaybtn').style.display = ''; $('#todaybtn').onclick = openToday;
+  document.addEventListener('keydown', e => { if (e.altKey && !e.ctrlKey && !e.metaKey && e.key.toLowerCase() === 'd') { e.preventDefault(); openToday(); } });
 }
 
 /* ---------- focus mode: Ctrl+F shows the current note full screen, again restores the columns ---------- */

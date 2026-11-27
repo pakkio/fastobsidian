@@ -4,8 +4,6 @@ A quick explorer and editor for an [Obsidian](https://obsidian.md) vault, in its
 One Rust program: it opens the vault in a native window that uses the system's web view
 (WebView2 on Windows, WebKit on macOS and Linux), so no external browser is involved. No network calls.
 
-The original Python version (`obsidian_explorer.py`, standard library only) is still here and works the same way
-in a browser; see [Python version](#python-version).
 
 ## Features
 
@@ -109,12 +107,12 @@ Each note has **edit**, **rename** and **delete** buttons, and the sidebar has *
 - **Images and media**: paste a screenshot, drop files on the editor or use the image button. Files go to the folder
   set as "attachmentFolderPath" in `.obsidian/app.json` (vault root, the note's folder, or a subfolder of it), are never
   overwritten (`name 1.png`), and `![[name.png]]` is inserted at the caret. Pasted images are named like Obsidian's
-  (`Pasted image 20261127092201.png`). Daily notes and attachments need the Rust version.
+  (`Pasted image 20261127092201.png`).
 
 - **Delete is recoverable**: files move to `<vault>/.trash/`.
 - **Rename updates links**: `[[wikilinks]]` and markdown `[text](x.md)` links in other notes are repointed
   (markdown links are rewritten relative to each note; a moved note's own relative links are fixed too).
-  The Rust version keeps each note's line endings when it rewrites links.
+  Each note keeps its line endings when its links are rewritten.
 - **Conflict check**: saving is refused if the file changed on disk since you opened it.
 - Saving from the editor writes LF line endings.
 
@@ -135,17 +133,6 @@ of the index and refused by read and write (`MAX_NOTE_BYTES`).
 - Attachments (images, PDF, audio, video) are detected and resolved by the index; the file type list is `MEDIA_EXT` in `src/vault.rs`.
 - `explorer.html` embeds your vault's content; it is gitignored by default, so do not commit or share it unintentionally.
 
-## Python version
-
-`obsidian_explorer.py` needs only Python 3.9+ and runs in your browser instead of a window. Same options, plus `--open`
-to launch the browser; no `pick folder` dialog (Ctrl+O asks for a path).
-
-```bash
-python obsidian_explorer.py /path/to/vault --serve --open      # http://127.0.0.1:8765/
-python obsidian_explorer.py /path/to/vault -o explorer.html --open
-python obsidian_explorer.py /path/to/vault --mcp
-```
-
 ## Files
 
 | File | Purpose |
@@ -154,10 +141,9 @@ python obsidian_explorer.py /path/to/vault --mcp
 | `src/vault.rs` | Parsing, incremental index, search |
 | `src/ops.rs` | Safe paths, read/save/create/rename (link rewriting)/trash |
 | `src/server.rs`, `src/page.rs`, `src/mcp.rs` | Local server and live events, page and themes, MCP server |
-| `explorer_template.html` | UI (index, graph, note view, editor), built into the binary and used by the Python version |
-| `obsidian_explorer.py` | Python version |
+| `explorer_template.html` | UI (index, graph, note view, editor), built into the binary |
 | `sample-vault/` | Demo notes |
-| `tests/` | `cargo test` (Rust) and `python -m unittest discover -s tests` (Python), run by GitHub Actions on Linux, Windows and macOS |
+| `tests/` | `cargo test`, run by GitHub Actions on Linux, Windows and macOS |
 
 ## License
 

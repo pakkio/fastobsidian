@@ -14,11 +14,6 @@ build:
 static:
     cargo run --release -- "{{vault}}" -o explorer.html
 
-# Rust and Python tests
+# Tests
 test:
     cargo test
-    python -m unittest discover -s tests
-
-# Python version: serve the vault at http://127.0.0.1:8765/ and open the browser
-py-run:
-    python obsidian_explorer.py "{{vault}}" --serve --open
