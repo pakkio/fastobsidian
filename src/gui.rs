@@ -244,6 +244,16 @@ pub fn run(vault: Option<PathBuf>, theme: bool, watch: f64, cache: bool) -> Resu
     center(&window, SPLASH_SIZE);
 
     let started: Started = Arc::default();
+    // index the vault while the web view starts: the two do not depend on each other, and creating a web view
+    // can take a while (or, with a broken WebKitGTK sandbox, never finish)
+    {
+        let (v, p, s) = (vault.clone(), proxy.clone(), started.clone());
+        std::thread::Builder::new()
+            .name("startup".into())
+            .spawn(move || start(v, theme, watch, cache, p, s))
+            .map_err(|e| e.to_string())?;
+    }
+    send_after(&proxy, SPLASH_DELAY, UserEvent::ShowSplash);
     let mut context = WebContext::new(Some(data_dir()));
     let (st1, st2) = (started.clone(), started.clone());
     let (p_ipc, p_title, p_load) = (proxy.clone(), proxy.clone(), proxy.clone());
@@ -302,15 +312,6 @@ pub fn run(vault: Option<PathBuf>, theme: bool, watch: f64, cache: bool) -> Resu
         use wry::WebViewBuilderExtUnix;
         builder.build_gtk(window.default_vbox().unwrap()).map_err(|e| e.to_string())?
     };
-
-    {
-        let (v, p, s) = (vault.clone(), proxy.clone(), started.clone());
-        std::thread::Builder::new()
-            .name("startup".into())
-            .spawn(move || start(v, theme, watch, cache, p, s))
-            .map_err(|e| e.to_string())?;
-    }
-    send_after(&proxy, SPLASH_DELAY, UserEvent::ShowSplash);
 
     // splash scripts that arrive before the splash page has loaded wait here
     let mut pending: Option<Vec<String>> = Some(vec![]);
