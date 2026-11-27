@@ -51,11 +51,16 @@ pub struct Server {
 impl Server {
     /// Index the vault and bind 127.0.0.1:`port` (0 = any free port). Call `spawn` or `run` to serve.
     pub fn bind(vault: &Path, opts: Options) -> io::Result<Server> {
+        Self::bind_with_progress(vault, opts, &|_, _| {})
+    }
+
+    /// [`bind`](Self::bind), calling `progress(done, total)` while the notes are read.
+    pub fn bind_with_progress(vault: &Path, opts: Options, progress: &dyn Fn(usize, usize)) -> io::Result<Server> {
         let listener = TcpListener::bind(("127.0.0.1", opts.port))?;
         let port = listener.local_addr()?.port();
         let idx = Arc::new(if opts.cache { VaultIndex::with_cache(vault) } else { VaultIndex::new(vault) });
         let t0 = std::time::Instant::now();
-        let n = idx.build(false).notes.len();
+        let n = idx.build_with_progress(false, progress).notes.len();
         eprintln!("indexed {n} notes in {:.1}s", t0.elapsed().as_secs_f64());
         let shared = Arc::new(Shared {
             current: RwLock::new((vault.to_path_buf(), idx)),
@@ -76,6 +81,11 @@ impl Server {
 
     pub fn vault(&self) -> PathBuf {
         self.shared.current.read().unwrap().0.clone()
+    }
+
+    /// Notes in the index (cached right after `bind`).
+    pub fn note_count(&self) -> usize {
+        self.shared.current.read().unwrap().1.build(false).notes.len()
     }
 
     /// Serve in a background thread.

@@ -1,21 +1,134 @@
 //! The app window: the system webview (WebView2 / WebKit) showing the local server's page.
+//!
+//! The window opens at once on a splash page; the vault is indexed and its theme read in the background,
+//! then the webview moves to the local server's page.
+use fastobsidian::page::{enabled_plugins, obsidian_css};
 use fastobsidian::server::{media_file, FolderPicker, Options, Server, ServerHandle};
 use std::path::{Path, PathBuf};
-use std::sync::{mpsc, Arc, Mutex};
-use tao::dpi::LogicalSize;
+use std::sync::{mpsc, Arc, Mutex, OnceLock};
+use std::time::Duration;
+use tao::dpi::{LogicalSize, PhysicalPosition, PhysicalSize};
 use tao::event::{Event, WindowEvent};
 use tao::event_loop::{ControlFlow, EventLoopBuilder, EventLoopProxy};
-use tao::window::WindowBuilder;
-use wry::{NewWindowResponse, WebContext, WebViewBuilder};
+use tao::window::{Icon, Window, WindowBuilder};
+use wry::{NewWindowResponse, PageLoadEvent, WebContext, WebViewBuilder};
 
 /// Fixed so the page's origin, and with it the remembered light/dark choice, stays the same between launches.
 const PREFERRED_PORT: u16 = 47615;
 
+/// Shown while the vault loads.
+const SPLASH: &str = include_str!("../splash.html");
+const SPLASH_SIZE: LogicalSize<f64> = LogicalSize::new(380.0, 150.0);
+const APP_SIZE: LogicalSize<f64> = LogicalSize::new(1400.0, 900.0);
+
+/// Place the window in the middle of its monitor, for a window of logical `size`.
+fn center(window: &Window, size: LogicalSize<f64>) {
+    let Some(m) = window.current_monitor() else { return };
+    let (area, pos, scale) = (m.size(), m.position(), m.scale_factor());
+    let s: PhysicalSize<f64> = size.to_physical(scale);
+    let x = pos.x as f64 + ((area.width as f64 - s.width) / 2.0).max(0.0);
+    let y = pos.y as f64 + ((area.height as f64 - s.height) / 2.0).max(0.0);
+    window.set_outer_position(PhysicalPosition::new(x, y));
+}
+
+/// The window icon: the splash's crystal with its bolt, drawn at 64×64 (4×4 supersampled).
+fn app_icon() -> Option<Icon> {
+    const N: u32 = 64;
+    // shapes in the splash SVG's 120×120 coordinates, back to front, with top and bottom colors
+    type Shape = (&'static [(f64, f64)], [f64; 3], [f64; 3]);
+    let shapes: [Shape; 4] = [
+        (&[(60.0, 6.0), (26.0, 38.0), (36.0, 92.0), (60.0, 106.0)], [169.0, 155.0, 255.0], [91.0, 69.0, 240.0]),
+        (&[(60.0, 6.0), (94.0, 38.0), (84.0, 92.0), (60.0, 106.0)], [111.0, 216.0, 255.0], [47.0, 107.0, 245.0]),
+        (&[(60.0, 6.0), (46.0, 40.0), (26.0, 38.0)], [235.0, 232.0, 255.0], [235.0, 232.0, 255.0]),
+        (
+            &[(66.0, 30.0), (50.0, 62.0), (61.0, 62.0), (55.0, 88.0), (73.0, 54.0), (62.0, 54.0), (70.0, 30.0)],
+            [255.0, 247.0, 194.0],
+            [251.0, 191.0, 36.0],
+        ),
+    ];
+    let inside = |poly: &[(f64, f64)], x: f64, y: f64| {
+        let mut c = false;
+        for i in 0..poly.len() {
+            let ((x1, y1), (x2, y2)) = (poly[i], poly[(i + 1) % poly.len()]);
+            if (y1 > y) != (y2 > y) && x < x1 + (y - y1) * (x2 - x1) / (y2 - y1) {
+                c = !c;
+            }
+        }
+        c
+    };
+    let mut rgba = Vec::with_capacity((N * N * 4) as usize);
+    for py in 0..N {
+        for px in 0..N {
+            let (mut acc, mut alpha) = ([0.0; 3], 0.0);
+            for sy in 0..4 {
+                for sx in 0..4 {
+                    // map the icon onto the crystal's box (x 26..94, y 4..108) with a small margin
+                    let x = 8.0 + (px as f64 + (sx as f64 + 0.5) / 4.0) / N as f64 * 104.0;
+                    let y = 4.0 + (py as f64 + (sy as f64 + 0.5) / 4.0) / N as f64 * 104.0;
+                    if let Some((_, top, bot)) = shapes.iter().rev().find(|(p, _, _)| inside(p, x, y)) {
+                        let t = ((y - 6.0) / 100.0).clamp(0.0, 1.0);
+                        for k in 0..3 {
+                            acc[k] += top[k] + (bot[k] - top[k]) * t;
+                        }
+                        alpha += 1.0;
+                    }
+                }
+            }
+            let c = |k: usize| if alpha > 0.0 { (acc[k] / alpha) as u8 } else { 0 };
+            rgba.extend_from_slice(&[c(0), c(1), c(2), (alpha / 16.0 * 255.0) as u8]);
+        }
+    }
+    Icon::from_rgba(rgba, N, N).ok()
+}
+
 enum UserEvent {
     PickFolder(mpsc::Sender<Option<PathBuf>>),
-    CloseAnswer { dirty: bool },
+    CloseAnswer {
+        dirty: bool,
+    },
     Title(String),
+    /// the splash page has loaded and can run scripts
+    SplashReady,
+    /// a script for the splash page
+    Splash(String),
+    /// the server is up: show the app at this URL
+    Ready(String),
+    /// loading is taking a while: show the splash (ignored once the app is up)
+    ShowSplash,
+    /// a page finished loading in the webview
+    PageLoaded(String),
+    /// show the window whatever it holds (fallback if no page-load event arrives)
+    Show,
 }
+
+/// Loads faster than this never show the splash, so a quick start does not flash it.
+const SPLASH_DELAY: Duration = Duration::from_millis(300);
+/// Show the app window even if its page has not reported loading by then.
+const SHOW_FALLBACK: Duration = Duration::from_secs(2);
+
+/// Turn the (hidden or splash) window into the full app window, once.
+fn show_app(window: &Window, done: &mut bool) {
+    if std::mem::replace(done, true) {
+        return;
+    }
+    window.set_decorations(true);
+    window.set_resizable(true);
+    window.set_inner_size(APP_SIZE);
+    center(window, APP_SIZE);
+    window.set_visible(true);
+    window.set_focus();
+}
+
+fn send_after(proxy: &EventLoopProxy<UserEvent>, delay: Duration, ev: UserEvent) {
+    let proxy = proxy.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(delay);
+        let _ = proxy.send_event(ev);
+    });
+}
+
+/// The local server once started: its origin and handle.
+type Started = Arc<OnceLock<(String, Arc<ServerHandle>)>>;
 
 fn data_dir() -> PathBuf {
     let env = |k| std::env::var_os(k).map(PathBuf::from);
@@ -79,7 +192,71 @@ fn picker(proxy: &EventLoopProxy<UserEvent>) -> FolderPicker {
 fn vault_title(vault: &Path) -> String {
     let name =
         vault.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| vault.display().to_string());
-    format!("{name} · fastobsidian")
+    format!("{name} · FastObsidian")
+}
+
+fn js(s: &str) -> String {
+    serde_json::Value::from(s).to_string()
+}
+
+fn html_escape(s: &str) -> String {
+    s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
+}
+
+fn plural(n: usize, one: &str) -> String {
+    format!("{n} {one}{}", if n == 1 { "" } else { "s" })
+}
+
+/// Background start-up: index the vault, read its theme and plugin list, start the server.
+/// Each step is reported to the splash page.
+fn start(vault: PathBuf, theme: bool, watch: f64, proxy: EventLoopProxy<UserEvent>, started: Started) {
+    let say = |script: String| {
+        let _ = proxy.send_event(UserEvent::Splash(script));
+    };
+    let step = |id: &str, text: &str, state: &str| say(format!("step('{id}', {}, '{state}')", js(text)));
+
+    let t0 = std::time::Instant::now();
+    let opts = |port| Options { port, theme, watch, native: true, picker: Some(picker(&proxy)), cache: true };
+    // one splash update per percent, not per note
+    let last = std::cell::Cell::new(usize::MAX);
+    let progress = |done: usize, total: usize| {
+        let pct = (done * 100).checked_div(total).unwrap_or(100);
+        if last.replace(pct) != pct {
+            say(format!("progress({done}, {total})"));
+        }
+    };
+    let bind = |port| Server::bind_with_progress(&vault, opts(port), &progress);
+    let server = match bind(PREFERRED_PORT).or_else(|_| bind(0)) {
+        Ok(s) => s,
+        Err(e) => {
+            step("vault", "Could not open the vault", "fail");
+            return say(format!("fail({})", js(&format!("cannot start the local server: {e}"))));
+        }
+    };
+    let indexed = format!("{} indexed in {:.1}s", plural(server.note_count(), "note"), t0.elapsed().as_secs_f64());
+    step("vault", &indexed, "ok");
+
+    if theme {
+        step("theme", "Loading theme…", "run");
+        let obs = obsidian_css(&vault);
+        let mut text = if obs.theme.is_empty() { "Default theme".to_string() } else { format!("Theme: {}", obs.theme) };
+        if !obs.snippets.is_empty() {
+            text += &format!(" · {}", plural(obs.snippets.len(), "snippet"));
+        }
+        step("theme", &text, "ok");
+    } else {
+        step("theme", "Obsidian theme off (start with --theme)", "skip");
+    }
+
+    match enabled_plugins(&vault).len() {
+        0 => step("plugins", "No community plugins", "skip"),
+        n => step("plugins", &format!("{} enabled in Obsidian (not run here)", plural(n, "community plugin")), "skip"),
+    }
+
+    let url = server.url();
+    let _ = started.set((url.clone(), server.spawn()));
+    say("done()".into());
+    let _ = proxy.send_event(UserEvent::Ready(url));
 }
 
 pub fn run(vault: Option<PathBuf>, theme: bool, watch: f64) -> Result<(), String> {
@@ -89,44 +266,69 @@ pub fn run(vault: Option<PathBuf>, theme: bool, watch: f64) -> Result<(), String
         Some(v) => v,
         None => rfd::FileDialog::new().set_title("Open an Obsidian vault").pick_folder().ok_or("no folder chosen")?,
     };
-    let opts = |port| Options { port, theme, watch, native: true, picker: Some(picker(&proxy)), cache: true };
-    let server = Server::bind(&vault, opts(PREFERRED_PORT))
-        .or_else(|_| Server::bind(&vault, opts(0)))
-        .map_err(|e| format!("cannot start the local server: {e}"))?;
-    let url = server.url();
-    let server: Arc<ServerHandle> = server.spawn();
 
+    // starts hidden, as a small borderless splash that appears only if loading is slow;
+    // grows into the app window once the vault is loaded
     let window = WindowBuilder::new()
         .with_title(vault_title(&vault))
-        .with_inner_size(LogicalSize::new(1400.0, 900.0))
+        .with_visible(false)
+        .with_window_icon(app_icon())
+        .with_inner_size(SPLASH_SIZE)
+        .with_decorations(false)
+        .with_resizable(false)
         .build(&event_loop)
         .map_err(|e| e.to_string())?;
+    center(&window, SPLASH_SIZE);
 
+    let started: Started = Arc::default();
     let mut context = WebContext::new(Some(data_dir()));
-    let (o1, s1) = (url.clone(), server.clone());
-    let (o2, s2) = (url.clone(), server.clone());
-    let (p_ipc, p_title) = (proxy.clone(), proxy.clone());
+    let (st1, st2) = (started.clone(), started.clone());
+    let (p_ipc, p_title, p_load) = (proxy.clone(), proxy.clone(), proxy.clone());
+    let splash = SPLASH
+        .replace("__TITLE__", &html_escape(&vault_title(&vault)))
+        .replace("__PATH__", &html_escape(&vault.display().to_string()).replace('"', "&quot;"))
+        .replace(
+            "__VAULT__",
+            &html_escape(
+                &vault.file_name().map_or_else(|| vault.display().to_string(), |n| n.to_string_lossy().into()),
+            ),
+        );
     let builder = WebViewBuilder::new_with_web_context(&mut context)
-        .with_url(&url)
+        .with_html(splash)
         .with_devtools(cfg!(debug_assertions))
         .with_new_window_req_handler(move |u, _| {
-            open_external(&u, &o1, &s1);
+            if let Some((origin, server)) = st1.get() {
+                open_external(&u, origin, server);
+            }
             NewWindowResponse::Deny
         })
         .with_navigation_handler(move |u| {
-            if u.starts_with(&o2) || u.starts_with("about:") {
+            let Some((origin, server)) = st2.get() else {
+                return true; // the splash page, before the server is up
+            };
+            if u.starts_with(origin.as_str()) || u.starts_with("about:") {
                 return true;
             }
-            open_external(&u, &o2, &s2);
+            open_external(&u, origin, server);
             false
         })
         .with_ipc_handler(move |req| {
-            if let Some(state) = req.body().strip_prefix("close:") {
+            let body = req.body();
+            if let Some(state) = body.strip_prefix("close:") {
                 let _ = p_ipc.send_event(UserEvent::CloseAnswer { dirty: state == "dirty" });
+            } else if body == "splash:ready" {
+                let _ = p_ipc.send_event(UserEvent::SplashReady);
+            } else if body == "splash:close" {
+                let _ = p_ipc.send_event(UserEvent::CloseAnswer { dirty: false });
             }
         })
         .with_document_title_changed_handler(move |t| {
             let _ = p_title.send_event(UserEvent::Title(t));
+        })
+        .with_on_page_load_handler(move |ev, url| {
+            if matches!(ev, PageLoadEvent::Finished) {
+                let _ = p_load.send_event(UserEvent::PageLoaded(url));
+            }
         });
 
     #[cfg(any(windows, target_os = "macos"))]
@@ -138,11 +340,28 @@ pub fn run(vault: Option<PathBuf>, theme: bool, watch: f64) -> Result<(), String
         builder.build_gtk(window.default_vbox().unwrap()).map_err(|e| e.to_string())?
     };
 
+    {
+        let (v, p, s) = (vault.clone(), proxy.clone(), started.clone());
+        std::thread::Builder::new()
+            .name("startup".into())
+            .spawn(move || start(v, theme, watch, p, s))
+            .map_err(|e| e.to_string())?;
+    }
+    send_after(&proxy, SPLASH_DELAY, UserEvent::ShowSplash);
+
+    // splash scripts that arrive before the splash page has loaded wait here
+    let mut pending: Option<Vec<String>> = Some(vec![]);
+    let mut app_shown = false;
+    let mut app_visible = false;
     event_loop.run(move |event, _, flow| {
         *flow = ControlFlow::Wait;
         let _ = &context; // keep the webview's data context alive as long as the window
         match event {
             Event::WindowEvent { event: WindowEvent::CloseRequested, .. } => {
+                if !app_shown {
+                    *flow = ControlFlow::Exit;
+                    return;
+                }
                 // ask the page whether the editor has unsaved text; it answers through IPC
                 let asked = webview.evaluate_script(
                     "window.ipc.postMessage('close:' + (typeof ED !== 'undefined' && ED.dirty ? 'dirty' : 'clean'))",
@@ -151,6 +370,31 @@ pub fn run(vault: Option<PathBuf>, theme: bool, watch: f64) -> Result<(), String
                     *flow = ControlFlow::Exit;
                 }
             }
+            Event::UserEvent(UserEvent::SplashReady) if !app_shown => {
+                for script in pending.take().unwrap_or_default() {
+                    let _ = webview.evaluate_script(&script);
+                }
+            }
+            Event::UserEvent(UserEvent::Splash(script)) if !app_shown => match &mut pending {
+                Some(queue) => queue.push(script),
+                None => {
+                    let _ = webview.evaluate_script(&script);
+                }
+            },
+            Event::UserEvent(UserEvent::Ready(url)) => {
+                app_shown = true;
+                let _ = webview.load_url(&url);
+                // a visible splash stays as it is until the app page has loaded
+                send_after(&proxy, SHOW_FALLBACK, UserEvent::Show);
+            }
+            Event::UserEvent(UserEvent::ShowSplash) if !app_shown => {
+                window.set_visible(true);
+                window.set_focus(); // a window shown later must come to the front itself
+            }
+            Event::UserEvent(UserEvent::PageLoaded(url)) if app_shown && url.starts_with("http://127.0.0.1:") => {
+                show_app(&window, &mut app_visible)
+            }
+            Event::UserEvent(UserEvent::Show) if app_shown => show_app(&window, &mut app_visible),
             Event::UserEvent(UserEvent::CloseAnswer { dirty }) => {
                 let close = !dirty
                     || rfd::MessageDialog::new()

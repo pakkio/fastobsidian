@@ -13,6 +13,8 @@ pub struct ObsidianCss {
     /// "dark" / "light" from Obsidian's base theme, if set
     pub mode: Option<&'static str>,
     pub theme: String,
+    /// enabled CSS snippets that were found
+    pub snippets: Vec<String>,
 }
 
 fn safe_name(s: &str) -> bool {
@@ -34,7 +36,7 @@ pub fn obsidian_css(vault: &Path) -> ObsidianCss {
         .and_then(|s| serde_json::from_str(&s).ok())
         .filter(Value::is_object)
         .unwrap_or_else(|| json!({}));
-    let mut parts = vec![];
+    let (mut parts, mut snippets) = (vec![], vec![]);
     let theme = app["cssTheme"].as_str().unwrap_or("").to_string();
     if safe_name(&theme) {
         // current layout, then the pre-1.0 one
@@ -50,6 +52,7 @@ pub fn obsidian_css(vault: &Path) -> ObsidianCss {
         for s in list.iter().filter_map(Value::as_str).filter(|s| safe_name(s)) {
             if let Some(css) = read(&base.join("snippets").join(format!("{s}.css"))) {
                 parts.push(format!("/* snippet: {s} */\n{css}"));
+                snippets.push(s.to_string());
             }
         }
     }
@@ -58,7 +61,17 @@ pub fn obsidian_css(vault: &Path) -> ObsidianCss {
         Some("moonstone") => Some("light"),
         _ => None,
     };
-    ObsidianCss { css: parts.join("\n"), mode, theme }
+    ObsidianCss { css: parts.join("\n"), mode, theme, snippets }
+}
+
+/// Community plugins enabled in <vault>/.obsidian/community-plugins.json (listed, never run).
+pub fn enabled_plugins(vault: &Path) -> Vec<String> {
+    let p = vault.join(".obsidian").join("community-plugins.json");
+    if no_links(vault, &p).is_err() || fs::metadata(&p).map_or(true, |m| !m.is_file() || m.len() > max_note_bytes()) {
+        return vec![];
+    }
+    let list: Value = fs::read(&p).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or(Value::Null);
+    list.as_array().map(|a| a.iter().filter_map(Value::as_str).map(str::to_string).collect()).unwrap_or_default()
 }
 
 fn placeholder() -> &'static regex::Regex {
