@@ -172,14 +172,14 @@ fn plural(n: usize, one: &str) -> String {
 
 /// Background start-up: index the vault, read its theme and plugin list, start the server.
 /// Each step is reported to the splash page.
-fn start(vault: PathBuf, theme: bool, watch: f64, proxy: EventLoopProxy<UserEvent>, started: Started) {
+fn start(vault: PathBuf, theme: bool, watch: f64, cache: bool, proxy: EventLoopProxy<UserEvent>, started: Started) {
     let say = |script: String| {
         let _ = proxy.send_event(UserEvent::Splash(script));
     };
     let step = |id: &str, text: &str, state: &str| say(format!("step('{id}', {}, '{state}')", js(text)));
 
     let t0 = std::time::Instant::now();
-    let opts = |port| Options { port, theme, watch, native: true, picker: Some(picker(&proxy)), cache: true };
+    let opts = |port| Options { port, theme, watch, native: true, picker: Some(picker(&proxy)), cache };
     // one splash update per percent, not per note
     let last = std::cell::Cell::new(usize::MAX);
     let progress = |done: usize, total: usize| {
@@ -222,7 +222,7 @@ fn start(vault: PathBuf, theme: bool, watch: f64, proxy: EventLoopProxy<UserEven
     let _ = proxy.send_event(UserEvent::Ready(url));
 }
 
-pub fn run(vault: Option<PathBuf>, theme: bool, watch: f64) -> Result<(), String> {
+pub fn run(vault: Option<PathBuf>, theme: bool, watch: f64, cache: bool) -> Result<(), String> {
     let event_loop = EventLoopBuilder::<UserEvent>::with_user_event().build();
     let proxy = event_loop.create_proxy();
     let vault = match vault {
@@ -307,7 +307,7 @@ pub fn run(vault: Option<PathBuf>, theme: bool, watch: f64) -> Result<(), String
         let (v, p, s) = (vault.clone(), proxy.clone(), started.clone());
         std::thread::Builder::new()
             .name("startup".into())
-            .spawn(move || start(v, theme, watch, p, s))
+            .spawn(move || start(v, theme, watch, cache, p, s))
             .map_err(|e| e.to_string())?;
     }
     send_after(&proxy, SPLASH_DELAY, UserEvent::ShowSplash);

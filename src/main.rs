@@ -19,6 +19,7 @@ USAGE:
 OPTIONS:
     --theme            use the vault's Obsidian theme and enabled CSS snippets (.obsidian/appearance.json)
     --watch SECONDS    how often to check the vault for outside changes while a page is open (default 1, 0 = off)
+    --no-cache         do not read or write the index cache (see the README)
     --port N           port for --serve (default 8765)
     -o, --out FILE     static output file
     -h, --help         this help
@@ -33,10 +34,12 @@ struct Args {
     port: u16,
     theme: bool,
     watch: f64,
+    cache: bool,
 }
 
 fn parse_args() -> Result<Args, String> {
-    let mut a = Args { vault: None, serve: false, mcp: false, out: None, port: 8765, theme: false, watch: 1.0 };
+    let mut a =
+        Args { vault: None, serve: false, mcp: false, out: None, port: 8765, theme: false, watch: 1.0, cache: true };
     let mut it = std::env::args().skip(1);
     while let Some(arg) = it.next() {
         let mut value = |name: &str| it.next().ok_or(format!("{name} needs a value"));
@@ -52,6 +55,7 @@ fn parse_args() -> Result<Args, String> {
             "--serve" => a.serve = true,
             "--mcp" => a.mcp = true,
             "--theme" => a.theme = true,
+            "--no-cache" => a.cache = false,
             "--port" => a.port = value("--port")?.parse().map_err(|_| "--port must be a number")?,
             "--watch" => {
                 a.watch = value("--watch")?.parse().map_err(|_| "--watch must be a number of seconds")?;
@@ -107,7 +111,7 @@ fn main() -> ExitCode {
         } else if a.serve {
             let v = vault(&a.vault)?;
             let opts =
-                Options { port: a.port, theme: a.theme, watch: a.watch, native: false, picker: None, cache: true };
+                Options { port: a.port, theme: a.theme, watch: a.watch, native: false, picker: None, cache: a.cache };
             let srv = Server::bind(&v, opts).map_err(|e| format!("cannot listen on 127.0.0.1:{}: {e}", a.port))?;
             println!("Serving {} at {}  (Ctrl+C to stop; deleted notes go to .trash)", v.display(), srv.url());
             srv.run();
@@ -117,7 +121,7 @@ fn main() -> ExitCode {
                 None => None,
             };
             hide_own_console();
-            gui::run(v, a.theme, a.watch)?;
+            gui::run(v, a.theme, a.watch, a.cache)?;
         }
         Ok(())
     })();
