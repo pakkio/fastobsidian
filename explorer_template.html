@@ -122,6 +122,32 @@ td.n{text-align:right;font-variant-numeric:tabular-nums}
 .body hr{border:0;border-top:1px solid var(--line);margin:1.6em 0}
 .body .li{margin:3px 0}.body .li b.m{display:inline-block;width:1.5em;color:var(--acc);font-weight:600}
 .body img{max-width:100%;height:auto;border-radius:var(--r);box-shadow:var(--shadow)}.body audio,.body video{max-width:100%;border-radius:var(--r)}
+.mmd{margin:16px 0;padding:14px;background:var(--panel);border:1px solid var(--line);border-radius:var(--r);overflow:auto;text-align:center}
+.mmd svg{max-width:100%;height:auto;display:inline-block;vertical-align:middle}
+.math-blk{margin:14px 0;padding:12px 16px;background:var(--panel);border:1px solid var(--line);border-radius:var(--r);overflow-x:auto;text-align:center}
+math{font-size:1.05em}.math-blk math{font-size:1.22em}
+.lv-pv{margin-top:8px;padding:10px 14px;background:var(--panel);border:1px solid var(--line);border-radius:var(--r);overflow:auto}
+.lv-pv .mmd,.lv-pv .math-blk{margin:0;padding:0;background:none;border:0}
+.lv-pv-lbl{font-size:10.5px;text-transform:uppercase;letter-spacing:.08em;color:var(--dim);margin-bottom:6px;font-weight:650}
+.sl-card .math-blk{margin:14px auto;background:transparent;border:0}
+#slides{position:fixed;inset:0;z-index:50;display:none;flex-direction:column;background:radial-gradient(900px 520px at 88% -8%,var(--glow1),transparent 62%),radial-gradient(760px 520px at -8% 108%,var(--glow2),transparent 62%),var(--bg);color:var(--fg)}
+#slides.open{display:flex}
+.sl-stage{flex:1;display:grid;place-items:center;overflow:auto;padding:48px max(48px,8vw) 84px}
+.sl-card{width:100%;max-width:980px;font-size:clamp(18px,2.1vw,26px);line-height:1.55;animation:rise .22s cubic-bezier(.2,.7,.2,1)}
+.sl-card h1{font-size:2em;margin:.2em 0 .45em;line-height:1.15;letter-spacing:-.03em;background:var(--grad);-webkit-background-clip:text;background-clip:text;color:transparent}
+.sl-card h2{font-size:1.45em;margin:.3em 0 .45em;border-bottom:1px solid var(--line);padding-bottom:.25em}
+.sl-card h3{font-size:1.15em;margin:.4em 0 .3em}
+.sl-card pre{font-size:.62em;text-align:left}.sl-card code{font-size:.82em}.sl-card pre code{font-size:1em}
+.sl-card img,.sl-card video{max-height:58vh;width:auto;display:block;margin:14px auto}
+.sl-card .mmd{margin:14px auto}.sl-card .mmd svg{max-height:56vh;width:auto}
+.sl-card table{font-size:.78em}
+.sl-hud{position:fixed;left:50%;bottom:20px;transform:translateX(-50%);display:flex;align-items:center;gap:6px;padding:6px 10px;border-radius:999px;background:var(--side);backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px);border:1px solid var(--line);box-shadow:var(--shadow);font-size:13px}
+.sl-hud button{background:transparent;border:1px solid transparent;color:var(--fg);padding:4px 10px;border-radius:999px;cursor:pointer;font:inherit;font-weight:600;transition:all .15s}
+.sl-hud button:hover:not(:disabled){background:var(--panel2);border-color:var(--line);color:var(--acc)}
+.sl-hud button:disabled{opacity:.35;cursor:default}
+.sl-cnt{min-width:52px;text-align:center;color:var(--dim);font-variant-numeric:tabular-nums;font-size:12.5px}
+.sl-bar{position:fixed;left:0;right:0;bottom:0;height:3px;background:var(--line)}
+.sl-bar i{display:block;height:100%;background:var(--grad);transition:width .2s}
 .ghost{color:var(--ghost);border-bottom:1px dashed var(--ghost);cursor:help}
 .props{display:grid;grid-template-columns:max-content 1fr;gap:4px 18px;background:var(--panel);border:1px solid var(--line);border-radius:var(--r);padding:12px 16px;margin:0 0 20px;font-size:12.5px;max-width:760px}
 .props>span:nth-child(odd){color:var(--dim);font-weight:600;text-transform:uppercase;font-size:11px;letter-spacing:.06em;padding-top:2px}
@@ -252,6 +278,17 @@ body.obs{--bg:var(--background-primary);--bgs:var(--background-primary);--side:v
     <div class="view" id="v-note"><div class="pad note" id="noteBody"></div></div>
   </section>
 </div>
+<div id="slides" role="dialog" aria-label="Slides" aria-hidden="true">
+  <div class="sl-stage"><div class="sl-card body" id="slCard"></div></div>
+  <div class="sl-hud">
+    <button id="slPrev" title="Previous slide (Left)">&#8249;</button>
+    <span class="sl-cnt" id="slCnt">1 / 1</span>
+    <button id="slNext" title="Next slide (Right / Space)">&#8250;</button>
+    <button id="slFs" title="Toggle fullscreen (F)">&#9974;</button>
+    <button id="slClose" title="Exit slides (Esc)">&#10005;</button>
+  </div>
+  <div class="sl-bar"><i id="slBar"></i></div>
+</div>
 <script>window.LIVE=/*__LIVE__*/false;window.OBS=/*__OBS__*/null;window.NATIVE=/*__NATIVE__*/false;</script>
 <script type="application/json" id="data">/*__DATA__*/</script>
 <script>
@@ -349,12 +386,188 @@ function media(rel, alt, size) {
 const SIZE = /^\d+(x\d+)?$/;
 const noteHref = id => '#n/' + encodeURIComponent(id);
 
+/* ---------- built-in LaTeX -> native MathML renderer (zero dependencies, offline) ---------- */
+const TEX_SYM = {
+  alpha:'α',beta:'β',gamma:'γ',delta:'δ',epsilon:'ϵ',varepsilon:'ε',zeta:'ζ',eta:'η',theta:'θ',vartheta:'ϑ',
+  iota:'ι',kappa:'κ',lambda:'λ',mu:'μ',nu:'ν',xi:'ξ',pi:'π',varpi:'ϖ',rho:'ρ',varrho:'ϱ',sigma:'σ',varsigma:'ς',
+  tau:'τ',upsilon:'υ',phi:'ϕ',varphi:'φ',chi:'χ',psi:'ψ',omega:'ω',
+  Gamma:'Γ',Delta:'Δ',Theta:'Θ',Lambda:'Λ',Xi:'Ξ',Pi:'Π',Sigma:'Σ',Upsilon:'Υ',Phi:'Φ',Psi:'Ψ',Omega:'Ω',
+  infty:'∞',partial:'∂',nabla:'∇',hbar:'ℏ',ell:'ℓ',Re:'ℜ',Im:'ℑ',aleph:'ℵ',emptyset:'∅',varnothing:'∅',
+  pm:'±',mp:'∓',times:'×',div:'÷',cdot:'·',cdots:'⋯',ldots:'…',dots:'…',vdots:'⋮',ddots:'⋱',circ:'∘',bullet:'•',
+  ast:'∗',star:'⋆',oplus:'⊕',otimes:'⊗',odot:'⊙',cup:'∪',cap:'∩',setminus:'∖',wedge:'∧',vee:'∨',neg:'¬',lnot:'¬',
+  le:'≤',leq:'≤',ge:'≥',geq:'≥',ne:'≠',neq:'≠',approx:'≈',equiv:'≡',sim:'∼',simeq:'≃',cong:'≅',propto:'∝',
+  ll:'≪',gg:'≫',subset:'⊂',supset:'⊃',subseteq:'⊆',supseteq:'⊇',in:'∈',notin:'∉',ni:'∋',
+  to:'→',rightarrow:'→',leftarrow:'←',leftrightarrow:'↔',Rightarrow:'⇒',Leftarrow:'⇐',Leftrightarrow:'⇔',
+  iff:'⇔',implies:'⇒',mapsto:'↦',uparrow:'↑',downarrow:'↓',forall:'∀',exists:'∃',nexists:'∄',
+  therefore:'∴',because:'∵',angle:'∠',perp:'⊥',parallel:'∥',triangle:'△',degree:'°',prime:'′',
+  sin:'sin',cos:'cos',tan:'tan',cot:'cot',sec:'sec',csc:'csc',arcsin:'arcsin',arccos:'arccos',arctan:'arctan',
+  sinh:'sinh',cosh:'cosh',tanh:'tanh',log:'log',ln:'ln',exp:'exp',lim:'lim',sup:'sup',inf:'inf',max:'max',min:'min',
+  det:'det',dim:'dim',ker:'ker',gcd:'gcd',Pr:'Pr',arg:'arg',deg:'deg',mod:'mod',
+  sum:'∑',prod:'∏',coprod:'∐',int:'∫',iint:'∬',iiint:'∭',oint:'∮',bigcup:'⋃',bigcap:'⋂',bigoplus:'⨁',bigotimes:'bigotimes'
+};
+TEX_SYM.bigotimes = '⨂';
+const TEX_BIG = new Set(['sum','prod','coprod','int','iint','iiint','oint','bigcup','bigcap','bigoplus','bigotimes','lim','sup','inf','max','min']);
+const TEX_FN = new Set(['sin','cos','tan','cot','sec','csc','arcsin','arccos','arctan','sinh','cosh','tanh','log','ln','exp','lim','sup','inf','max','min','det','dim','ker','gcd','Pr','arg','deg','mod']);
+const TEX_ACC = { hat:'^', bar:'¯', overline:'¯', vec:'→', tilde:'~', dot:'˙', ddot:'¨', check:'ˇ', breve:'˘', acute:'´', grave:'`' };
+const TEX_BB = { R:'ℝ', N:'ℕ', Z:'ℤ', Q:'ℚ', C:'ℂ', P:'ℙ', E:'𝔼', F:'𝔽', H:'ℍ' };
+const TEX_DELIM = { '(':')', '[':']', '{':'}', '|':'|', '\\{':'\\}', '\\|':'‖', '\\langle':'⟨', '\\rangle':'⟩', '\\lfloor':'⌊', '\\rfloor':'⌋', '\\lceil':'⌈', '\\rceil':'⌉', '.':'' };
+const TEX_ENV_DELIM = { pmatrix:['(',')'], bmatrix:['[',']'], Bmatrix:['{','}'], vmatrix:['|','|'], Vmatrix:['‖','‖'], cases:['{',''], matrix:['',''], aligned:['',''], align:['',''], 'align*':['',''], gather:['',''], 'gather*':['',''], array:['',''] };
+function renderTex(tex, display = false) {
+  let i = 0; const s = String(tex || '').trim(); if (!s) return '';
+  const skip = () => { while (i < s.length && /\s/.test(s[i])) i++; };
+  const peek = () => (skip(), s[i] || '');
+  const readCmd = () => {
+    i++; // past '\'
+    if (i >= s.length) return '\\';
+    if (!/[A-Za-z]/.test(s[i])) return s[i++];
+    let w = ''; while (i < s.length && /[A-Za-z]/.test(s[i])) w += s[i++];
+    return w;
+  };
+  const readBraceText = () => {
+    skip(); if (s[i] !== '{') return s[i++] || '';
+    let d = 1, out = ''; i++;
+    while (i < s.length && d > 0) { const c = s[i++]; if (c === '{') d++; else if (c === '}') { if (--d === 0) break; } out += c; }
+    return out;
+  };
+  const readDelim = () => {
+    skip(); if (i >= s.length) return '';
+    if (s[i] === '\\') { const c = readCmd(); return c === '{' || c === '}' || c === '|' ? c : TEX_DELIM['\\' + c] ?? c; }
+    const c = s[i++]; return c === '.' ? '' : c;
+  };
+  const parseGroup = (stop = '') => {
+    const items = [];
+    while (i < s.length) {
+      skip();
+      if (i >= s.length) break;
+      if (stop === '}' && s[i] === '}') { i++; break; }
+      if (stop === ']' && s[i] === ']') { i++; break; }
+      if (stop === 'right' && s.startsWith('\\right', i) && !/[A-Za-z]/.test(s[i + 6] || '')) break;
+      if (stop === 'env' && (s.startsWith('\\end{', i) || s.startsWith('\\\\', i) || s[i] === '&')) break;
+      items.push(parseAtom());
+    }
+    return items.length === 1 ? items[0] : `<mrow>${items.join('')}</mrow>`;
+  };
+  const parseArg = () => {
+    skip(); if (i >= s.length) return '<mrow></mrow>';
+    if (s[i] === '{') { i++; return parseGroup('}'); }
+    return parseAtom(true);
+  };
+  const parseBase = () => {
+    skip(); if (i >= s.length) return { html: '<mrow></mrow>', big: false };
+    const ch = s[i];
+    if (ch === '{') { i++; return { html: parseGroup('}'), big: false }; }
+    if (ch === '\\') {
+      const cmd = readCmd();
+      if (cmd === 'frac' || cmd === 'dfrac' || cmd === 'tfrac') return { html: `<mfrac>${parseArg()}${parseArg()}</mfrac>`, big: false };
+      if (cmd === 'binom' || cmd === 'dbinom') return { html: `<mrow><mo>(</mo><mfrac linethickness="0">${parseArg()}${parseArg()}</mfrac><mo>)</mo></mrow>`, big: false };
+      if (cmd === 'sqrt') {
+        skip();
+        if (s[i] === '[') { i++; const idx = parseGroup(']'); return { html: `<mroot>${parseArg()}${idx}</mroot>`, big: false }; }
+        return { html: `<msqrt>${parseArg()}</msqrt>`, big: false };
+      }
+      if (cmd === 'left') {
+        const l = readDelim(), inner = parseGroup('right');
+        let r = ''; if (s.startsWith('\\right', i)) { i += 6; r = readDelim(); }
+        return { html: `<mrow>${l ? `<mo stretchy="true">${esc(l)}</mo>` : ''}${inner}${r ? `<mo stretchy="true">${esc(r)}</mo>` : ''}</mrow>`, big: false };
+      }
+      if (cmd === 'begin') {
+        const env = readBraceText().trim();
+        if (env === 'array') readBraceText(); // column spec
+        const rows = []; let row = [];
+        while (i < s.length) {
+          skip();
+          if (s.startsWith('\\end{', i)) { i += 4; readBraceText(); break; }
+          row.push(`<mtd>${parseGroup('env')}</mtd>`);
+          skip();
+          if (s[i] === '&') { i++; continue; }
+          if (s.startsWith('\\\\', i)) { i += 2; if (s[i] === '[') { i++; parseGroup(']'); } rows.push(`<mtr>${row.join('')}</mtr>`); row = []; continue; }
+          if (s.startsWith('\\end{', i)) { i += 4; readBraceText(); break; }
+          break;
+        }
+        if (row.length) rows.push(`<mtr>${row.join('')}</mtr>`);
+        const [l, r] = TEX_ENV_DELIM[env] || ['', ''];
+        const tbl = `<mtable>${rows.join('')}</mtable>`;
+        return { html: l || r ? `<mrow>${l ? `<mo stretchy="true">${esc(l)}</mo>` : ''}${tbl}${r ? `<mo stretchy="true">${esc(r)}</mo>` : ''}</mrow>` : tbl, big: false };
+      }
+      if (cmd === 'text' || cmd === 'textrm' || cmd === 'mbox' || cmd === 'operatorname') return { html: `<mtext>${esc(readBraceText())}</mtext>`, big: false };
+      if (cmd === 'mathrm' || cmd === 'mathbf' || cmd === 'mathit' || cmd === 'mathsf' || cmd === 'mathtt' || cmd === 'mathcal') {
+        const mv = { mathrm:'normal', mathbf:'bold', mathit:'italic', mathsf:'sans-serif', mathtt:'monospace', mathcal:'script' }[cmd];
+        return { html: `<mstyle mathvariant="${mv}">${parseArg()}</mstyle>`, big: false };
+      }
+      if (cmd === 'mathbb') { const t = readBraceText(); return { html: `<mi>${esc([...t].map(c => TEX_BB[c] || c).join(''))}</mi>`, big: false }; }
+      if (cmd === 'color' || cmd === 'textcolor') {
+        const col = mmdColor(readBraceText().trim());
+        const body = parseArg();
+        return { html: col ? `<mstyle mathcolor="${esc(col)}">${body}</mstyle>` : body, big: false };
+      }
+      if (TEX_ACC[cmd]) return { html: `<mover accent="true">${parseArg()}<mo>${TEX_ACC[cmd]}</mo></mover>`, big: false };
+      if (cmd === 'underline') return { html: `<munder accentunder="true">${parseArg()}<mo>_</mo></munder>`, big: false };
+      if (cmd === 'overbrace') return { html: `<mover>${parseArg()}<mo>⏞</mo></mover>`, big: true };
+      if (cmd === 'underbrace') return { html: `<munder>${parseArg()}<mo>⏟</mo></munder>`, big: true };
+      if (cmd === ',' || cmd === 'thinspace') return { html: '<mspace width="0.17em"/>', big: false };
+      if (cmd === ';' || cmd === ':' || cmd === 'medspace') return { html: '<mspace width="0.28em"/>', big: false };
+      if (cmd === 'quad') return { html: '<mspace width="1em"/>', big: false };
+      if (cmd === 'qquad') return { html: '<mspace width="2em"/>', big: false };
+      if (cmd === ' ' || cmd === '~') return { html: '<mspace width="0.33em"/>', big: false };
+      if (cmd === '!' || cmd === 'limits' || cmd === 'nolimits' || cmd === 'displaystyle' || cmd === 'textstyle') return { html: '', big: false };
+      if (cmd === '{' || cmd === '}' || cmd === '%' || cmd === '$' || cmd === '#' || cmd === '_' || cmd === '&') return { html: `<mo>${esc(cmd)}</mo>`, big: false };
+      if (cmd === '|') return { html: '<mo>‖</mo>', big: false };
+      if (cmd === 'langle') return { html: '<mo>⟨</mo>', big: false };
+      if (cmd === 'rangle') return { html: '<mo>⟩</mo>', big: false };
+      if (cmd === 'lfloor') return { html: '<mo>⌊</mo>', big: false };
+      if (cmd === 'rfloor') return { html: '<mo>⌋</mo>', big: false };
+      if (cmd === 'lceil') return { html: '<mo>⌈</mo>', big: false };
+      if (cmd === 'rceil') return { html: '<mo>⌉</mo>', big: false };
+      if (cmd === 'not') { const nx = parseBase(); return { html: `<mrow><mo>¬</mo>${nx.html}</mrow>`, big: false }; }
+      if (TEX_SYM[cmd]) {
+        const sym = TEX_SYM[cmd], big = TEX_BIG.has(cmd);
+        const tag = TEX_FN.has(cmd) ? 'mi' : (/[a-zA-Zα-ωΑ-Ω∞∂∇ℏℓℜℑℵ∅]/.test(sym) ? 'mi' : 'mo');
+        return { html: `<${tag}${TEX_FN.has(cmd) ? ' mathvariant="normal"' : ''}>${esc(sym)}</${tag}>`, big };
+      }
+      return { html: `<mi mathvariant="normal">${esc(cmd)}</mi>`, big: false };
+    }
+    if (/[0-9]/.test(ch)) {
+      let num = ''; while (i < s.length && /[0-9.]/.test(s[i])) num += s[i++];
+      return { html: `<mn>${esc(num)}</mn>`, big: false };
+    }
+    if (/[A-Za-z]/.test(ch)) { i++; return { html: `<mi>${esc(ch)}</mi>`, big: false }; }
+    if (ch === '\'') { let p = ''; while (i < s.length && s[i] === '\'') { p += '′'; i++; } return { html: `<mo>${p}</mo>`, big: false }; }
+    i++;
+    return { html: `<mo>${esc(ch === '-' ? '−' : ch)}</mo>`, big: false };
+  };
+  const parseAtom = (noScripts = false) => {
+    const base = parseBase();
+    if (noScripts) return base.html;
+    let sub = null, sup = null;
+    while (true) {
+      const c = peek();
+      if (c === '_' && sub === null) { i++; sub = parseArg(); }
+      else if (c === '^' && sup === null) { i++; sup = parseArg(); }
+      else if (c === '\'' && sup === null) { let p = ''; while (i < s.length && s[i] === '\'') { p += '′'; i++; } sup = `<mo>${p}</mo>`; }
+      else break;
+    }
+    if (sub && sup) return base.big && display ? `<munderover>${base.html}${sub}${sup}</munderover>` : `<msubsup>${base.html}${sub}${sup}</msubsup>`;
+    if (sub) return base.big && display ? `<munder>${base.html}${sub}</munder>` : `<msub>${base.html}${sub}</msub>`;
+    if (sup) return base.big && display ? `<mover>${base.html}${sup}</mover>` : `<msup>${base.html}${sup}</msup>`;
+    return base.html;
+  };
+  try {
+    const inner = parseGroup('');
+    return `<math xmlns="http://www.w3.org/1998/Math/MathML" display="${display ? 'block' : 'inline'}">${inner}</math>`;
+  } catch (e) {
+    return `<code>${esc(tex)}</code>`;
+  }
+}
+
 /* ---------- markdown ---------- */
 let curId = null;
 function inline(s) {
   const st = [];
   const keep = h => '\u0001' + (st.push(h) - 1) + '\u0001';
   s = s.replace(/`([^`\n]+)`/g, (m, c) => keep('<code>' + c + '</code>'));
+  s = s.replace(/\\\$/g, () => keep('$'));
+  s = s.replace(/\$\$([^\n$]+?)\$\$/g, (m, t) => keep(renderTex(un(t), true)));
+  s = s.replace(/\$(?!\s)([^$\n]+?)(?<!\s)\$/g, (m, t) => keep(renderTex(un(t), false)));
   s = s.replace(/!\[([^\]]*)\]\((?:&lt;([^&]+?)&gt;|([^)\s]+))(?:\s+&quot;[^&]*&quot;)?\)/g, (m, alt, a, b) => {
     const url = un(a || b), rel = /^[a-z][a-z0-9+.-]*:/i.test(url) ? null : resolveAsset(url, curId);
     return keep(rel ? media(rel, un(alt)) : `<span class="ghost" title="${esc(url)}">${alt || url}</span>`);
@@ -396,18 +609,583 @@ function sectionOf(content, heading) {
   for (let j = idx + 1; j < lines.length; j++) { const m = lines[j].match(/^(#{1,6})\s/); if (m && m[1].length <= lv) { end = j; break; } }
   return lines.slice(idx + 1, end).join('\n');
 }
+/* ---------- built-in Mermaid SVG renderer (zero dependencies, offline, theme-aware) ---------- */
+let mmdSeq = 0;
+function renderMermaid(src) {
+  try {
+    const rawLines = src.replace(/\r\n?/g, '\n').split('\n').map(l => l.replace(/%%.*$/, '').trimEnd());
+    const first = rawLines.find(l => l.trim());
+    if (!first) return null;
+    const h = first.trim();
+    if (/^(flowchart|graph)\b/i.test(h)) return mmdFlow(rawLines);
+    if (/^sequenceDiagram\b/i.test(h)) return mmdSeqDiag(rawLines);
+    if (/^stateDiagram(?:-v2)?\b/i.test(h)) return mmdState(rawLines);
+    if (/^pie\b/i.test(h)) return mmdPie(rawLines);
+    if (/^classDiagram\b/i.test(h)) return mmdClass(rawLines);
+    if (/^erDiagram\b/i.test(h)) return mmdEr(rawLines);
+    if (/^mindmap\b/i.test(h)) return mmdMindmap(rawLines);
+    return null;
+  } catch (e) { return null; }
+}
+const mmdClean = s => String(s || '').trim().replace(/^"(.*)"$/, '$1').replace(/<br\s*\/?>/gi, '\n');
+const mmdColor = s => /^[#a-zA-Z0-9(),.% -]{1,40}$/.test(s) ? s : '';
+const mmdLines = s => mmdClean(s).split('\n');
+const mmdTextW = (s, cw = 8) => Math.max(...mmdLines(s).map(l => l.length), 1) * cw;
+function mmdTspans(x, y, lines, lh = 16, fill = 'var(--fg)', extra = '') {
+  const sy = y - ((lines.length - 1) * lh) / 2;
+  return `<text x="${x}" y="${sy}" text-anchor="middle" dominant-baseline="central" fill="${fill}" font-size="13" font-family="inherit"${extra}>` +
+    lines.map((l, i) => `<tspan x="${x}"${i ? ` dy="${lh}"` : ''}>${esc(l)}</tspan>`).join('') + '</text>';
+}
+function mmdSvg(w, h, mid, body) {
+  const mw = Math.max(120, Math.ceil(w)), mh = Math.max(60, Math.ceil(h));
+  return `<svg viewBox="0 0 ${mw} ${mh}" width="${mw}" height="${mh}" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Mermaid diagram">` +
+    `<defs>` +
+    `<marker id="${mid}a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 1.5L9.5 5L0 8.5z" fill="var(--dim)"/></marker>` +
+    `<marker id="${mid}o" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="7" markerHeight="7" orient="auto"><circle cx="5" cy="5" r="3.5" fill="var(--bgs)" stroke="var(--dim)" stroke-width="1.6"/></marker>` +
+    `<marker id="${mid}x" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M2 2L8 8M8 2L2 8" stroke="var(--dim)" stroke-width="1.8"/></marker>` +
+    `<marker id="${mid}t" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M1 1.5L9 5L1 8.5z" fill="var(--bgs)" stroke="var(--dim)" stroke-width="1.4"/></marker>` +
+    `<marker id="${mid}d" viewBox="0 0 12 10" refX="11" refY="5" markerWidth="9" markerHeight="8" orient="auto-start-reverse"><path d="M1 5L6 1.5L11 5L6 8.5z" fill="var(--dim)"/></marker>` +
+    `<marker id="${mid}h" viewBox="0 0 12 10" refX="11" refY="5" markerWidth="9" markerHeight="8" orient="auto-start-reverse"><path d="M1 5L6 1.5L11 5L6 8.5z" fill="var(--bgs)" stroke="var(--dim)" stroke-width="1.4"/></marker>` +
+    `</defs>${body}</svg>`;
+}
+// shared layered graph renderer for flowchart, state, class and ER diagrams
+function mmdLayoutGraph(dir, nodesMap, edges, subgraphs = [], styles = {}) {
+  const nodes = [...nodesMap.values()];
+  if (!nodes.length) return null;
+  const horiz = dir === 'LR' || dir === 'RL', rev = dir === 'RL' || dir === 'BT';
+  // measure nodes
+  for (const n of nodes) {
+    if (n.shape === 'dot' || n.shape === 'end') { n.w = 22; n.h = 22; continue; }
+    if (n.sections) {
+      const all = [n.label, ...n.sections.flat()];
+      const maxC = Math.max(...all.map(s => String(s).length), 8);
+      n.w = Math.max(130, maxC * 7.6 + 26);
+      n.h = 34 + n.sections.reduce((a, s) => a + (s.length ? s.length * 18 + 12 : 8), 0);
+      continue;
+    }
+    const ls = mmdLines(n.label), tw = Math.max(...ls.map(l => l.length), 1) * 8.2;
+    const padX = n.shape === 'diamond' ? 42 : n.shape === 'hex' ? 38 : n.shape === 'circle' ? 28 : 28;
+    const padY = n.shape === 'diamond' ? 28 : n.shape === 'db' ? 28 : 18;
+    n.w = Math.max(64, tw + padX);
+    n.h = Math.max(36, ls.length * 17 + padY);
+    if (n.shape === 'circle') { const d = Math.max(n.w, n.h); n.w = n.h = d; }
+    if (n.shape === 'diamond') { n.w = Math.max(n.w * 1.15, 76); n.h = Math.max(n.h * 1.35, 58); }
+  }
+  // assign layers with cycle breaking (DFS back-edge detection + longest-path rank)
+  const adj = new Map(nodes.map(n => [n.id, []])), back = new Set();
+  edges.forEach((e, i) => { if (adj.has(e.from) && adj.has(e.to)) adj.get(e.from).push({ to: e.to, i }); });
+  const vis = new Map();
+  const dfs = u => {
+    vis.set(u, 1);
+    for (const { to, i } of adj.get(u) || []) {
+      if (vis.get(to) === 1 || to === u) back.add(i);
+      else if (!vis.has(to)) dfs(to);
+    }
+    vis.set(u, 2);
+  };
+  nodes.forEach(n => { if (!vis.has(n.id)) dfs(n.id); });
+  const rank = new Map(nodes.map(n => [n.id, 0]));
+  for (let pass = 0; pass < nodes.length; pass++) {
+    let ch = false;
+    edges.forEach((e, i) => {
+      if (back.has(i) || !rank.has(e.from) || !rank.has(e.to)) return;
+      const nr = rank.get(e.from) + 1;
+      if (nr > rank.get(e.to)) { rank.set(e.to, nr); ch = true; }
+    });
+    if (!ch) break;
+  }
+  const maxR = Math.max(...rank.values(), 0);
+  const layers = Array.from({ length: maxR + 1 }, () => []);
+  nodes.forEach(n => layers[rank.get(n.id)].push(n));
+  // simple barycenter ordering (2 sweeps) to untangle crossings
+  const order = new Map();
+  const reindex = () => layers.forEach(L => L.forEach((n, i) => order.set(n.id, i)));
+  reindex();
+  const preds = new Map(nodes.map(n => [n.id, []])), succs = new Map(nodes.map(n => [n.id, []]));
+  edges.forEach((e, i) => { if (!back.has(i) && preds.has(e.to) && succs.has(e.from)) { preds.get(e.to).push(e.from); succs.get(e.from).push(e.to); } });
+  for (let sw = 0; sw < 2; sw++) {
+    for (let r = 1; r <= maxR; r++) {
+      layers[r].sort((a, b) => {
+        const pa = preds.get(a.id), pb = preds.get(b.id);
+        const ma = pa.length ? pa.reduce((s, p) => s + order.get(p), 0) / pa.length : order.get(a.id);
+        const mb = pb.length ? pb.reduce((s, p) => s + order.get(p), 0) / pb.length : order.get(b.id);
+        return ma - mb;
+      });
+      reindex();
+    }
+    for (let r = maxR - 1; r >= 0; r--) {
+      layers[r].sort((a, b) => {
+        const sa = succs.get(a.id), sb = succs.get(b.id);
+        const ma = sa.length ? sa.reduce((s, p) => s + order.get(p), 0) / sa.length : order.get(a.id);
+        const mb = sb.length ? sb.reduce((s, p) => s + order.get(p), 0) / sb.length : order.get(b.id);
+        return ma - mb;
+      });
+      reindex();
+    }
+  }
+  // compute coordinates
+  const gapMain = horiz ? 62 : 52, gapCross = horiz ? 26 : 30;
+  const layerMain = layers.map(L => Math.max(...L.map(n => horiz ? n.w : n.h), 36));
+  const layerCross = layers.map(L => L.reduce((s, n) => s + (horiz ? n.h : n.w), 0) + Math.max(0, L.length - 1) * gapCross);
+  const totalCross = Math.max(...layerCross, 80);
+  const pad = 28;
+  let posMain = pad;
+  const orderLayers = rev ? [...layers].reverse() : layers;
+  const orderMains = rev ? [...layerMain].reverse() : layerMain;
+  orderLayers.forEach((L, li) => {
+    const dim = orderMains[li];
+    const span = L.reduce((s, n) => s + (horiz ? n.h : n.w), 0) + Math.max(0, L.length - 1) * gapCross;
+    let posCross = pad + (totalCross - span) / 2;
+    for (const n of L) {
+      if (horiz) { n.x = posMain + dim / 2; n.y = posCross + n.h / 2; posCross += n.h + gapCross; }
+      else { n.x = posCross + n.w / 2; n.y = posMain + dim / 2; posCross += n.w + gapCross; }
+    }
+    posMain += dim + gapMain;
+  });
+  let W = horiz ? posMain - gapMain + pad : totalCross + pad * 2;
+  let H = horiz ? totalCross + pad * 2 : posMain - gapMain + pad;
+  if (back.size) { if (horiz) H += 28; else W += 36; }
+  const mid = 'm' + (++mmdSeq);
+  let sgSvg = '';
+  for (const sg of subgraphs) {
+    const mem = sg.ids.map(id => nodesMap.get(id)).filter(Boolean);
+    if (!mem.length) continue;
+    const x1 = Math.min(...mem.map(n => n.x - n.w / 2)) - 14, y1 = Math.min(...mem.map(n => n.y - n.h / 2)) - 26;
+    const x2 = Math.max(...mem.map(n => n.x + n.w / 2)) + 14, y2 = Math.max(...mem.map(n => n.y + n.h / 2)) + 14;
+    W = Math.max(W, x2 + 16); H = Math.max(H, y2 + 16);
+    sgSvg += `<rect x="${x1}" y="${y1}" width="${x2 - x1}" height="${y2 - y1}" rx="10" fill="var(--panel2)" fill-opacity=".45" stroke="var(--acc)" stroke-opacity=".45" stroke-dasharray="5 4"/>` +
+      `<text x="${x1 + 10}" y="${y1 + 15}" fill="var(--dim)" font-size="11.5" font-weight="650">${esc(sg.title)}</text>`;
+  }
+  const edgeAnchor = (a, b, isBack) => {
+    if (a.id === b.id) return { x1: a.x + a.w / 2, y1: a.y - 6, x2: a.x + a.w / 2, y2: a.y + 6, self: true };
+    if (isBack) {
+      if (horiz) return { x1: a.x, y1: a.y + a.h / 2, x2: b.x, y2: b.y + b.h / 2 };
+      return { x1: a.x + a.w / 2, y1: a.y, x2: b.x + b.w / 2, y2: b.y };
+    }
+    const dx = b.x - a.x, dy = b.y - a.y;
+    if (horiz ? Math.abs(dx) >= 1 : Math.abs(dy) < 1) {
+      const s = dx >= 0 ? 1 : -1;
+      return { x1: a.x + s * a.w / 2, y1: a.y, x2: b.x - s * b.w / 2, y2: b.y };
+    }
+    const s = dy >= 0 ? 1 : -1;
+    return { x1: a.x, y1: a.y + s * a.h / 2, x2: b.x, y2: b.y - s * b.h / 2 };
+  };
+  let edgeSvg = '';
+  edges.forEach((e, i) => {
+    const a = nodesMap.get(e.from), b = nodesMap.get(e.to); if (!a || !b) return;
+    const isBack = back.has(i), pt = edgeAnchor(a, b, isBack);
+    let d, lx, ly;
+    if (pt.self) {
+      d = `M${pt.x1},${pt.y1} C${pt.x1 + 42},${pt.y1 - 24} ${pt.x2 + 42},${pt.y2 + 24} ${pt.x2},${pt.y2}`;
+      lx = pt.x1 + 36; ly = a.y;
+    } else if (isBack) {
+      const off = horiz ? Math.max(a.y + a.h / 2, b.y + b.h / 2) + 34 : Math.max(a.x + a.w / 2, b.x + b.w / 2) + 36;
+      d = horiz ? `M${pt.x1},${pt.y1} C${pt.x1},${off} ${pt.x2},${off} ${pt.x2},${pt.y2}`
+                : `M${pt.x1},${pt.y1} C${off},${pt.y1} ${off},${pt.y2} ${pt.x2},${pt.y2}`;
+      lx = horiz ? (pt.x1 + pt.x2) / 2 : off - 4; ly = horiz ? off - 4 : (pt.y1 + pt.y2) / 2;
+    } else if (horiz) {
+      const mx = (pt.x1 + pt.x2) / 2;
+      d = `M${pt.x1},${pt.y1} C${mx},${pt.y1} ${mx},${pt.y2} ${pt.x2},${pt.y2}`;
+      lx = mx; ly = (pt.y1 + pt.y2) / 2;
+    } else {
+      const my = (pt.y1 + pt.y2) / 2;
+      d = `M${pt.x1},${pt.y1} C${pt.x1},${my} ${pt.x2},${my} ${pt.x2},${pt.y2}`;
+      lx = (pt.x1 + pt.x2) / 2; ly = my;
+    }
+    const dash = e.dash ? ' stroke-dasharray="5 4"' : '', sw = e.thick ? '2.6' : '1.6';
+    const ms = e.mStart ? ` marker-start="url(#${mid}${e.mStart})"` : '';
+    const me = e.mEnd ? ` marker-end="url(#${mid}${e.mEnd})"` : '';
+    edgeSvg += `<path d="${d}" fill="none" stroke="var(--dim)" stroke-width="${sw}"${dash}${ms}${me}/>`;
+    if (e.label) {
+      const lw = e.label.length * 7.2 + 12;
+      edgeSvg += `<rect x="${lx - lw / 2}" y="${ly - 10}" width="${lw}" height="20" rx="6" fill="var(--bgs)" stroke="var(--line)"/>` +
+        `<text x="${lx}" y="${ly}" text-anchor="middle" dominant-baseline="central" fill="var(--dim)" font-size="11.5">${esc(e.label)}</text>`;
+    }
+  });
+  let nodeSvg = '';
+  for (const n of nodes) {
+    const st = Object.assign({}, n.cls && styles[n.cls] || {}, styles['#' + n.id] || {});
+    const fill = st.fill || 'var(--panel2)', stroke = st.stroke || 'var(--acc)', color = st.color || 'var(--fg)';
+    const x = n.x - n.w / 2, y = n.y - n.h / 2;
+    if (n.shape === 'dot') {
+      nodeSvg += `<circle cx="${n.x}" cy="${n.y}" r="8" fill="var(--acc)"/>`;
+      continue;
+    }
+    if (n.shape === 'end') {
+      nodeSvg += `<circle cx="${n.x}" cy="${n.y}" r="10" fill="none" stroke="var(--acc)" stroke-width="2"/><circle cx="${n.x}" cy="${n.y}" r="5.5" fill="var(--acc)"/>`;
+      continue;
+    }
+    if (n.sections) {
+      nodeSvg += `<rect x="${x}" y="${y}" width="${n.w}" height="${n.h}" rx="8" fill="${fill}" stroke="${stroke}" stroke-width="1.5"/>`;
+      nodeSvg += `<text x="${n.x}" y="${y + 18}" text-anchor="middle" dominant-baseline="central" fill="${color}" font-size="13" font-weight="700">${esc(n.label)}</text>`;
+      let cy = y + 32;
+      for (const sec of n.sections) {
+        nodeSvg += `<line x1="${x}" y1="${cy}" x2="${x + n.w}" y2="${cy}" stroke="var(--line)"/>`;
+        cy += 6;
+        for (const item of sec) {
+          nodeSvg += `<text x="${x + 12}" y="${cy + 9}" dominant-baseline="central" fill="var(--fg)" font-size="12" font-family="ui-monospace,Consolas,monospace">${esc(item)}</text>`;
+          cy += 18;
+        }
+        cy += sec.length ? 6 : 2;
+      }
+      continue;
+    }
+    if (n.shape === 'diamond') {
+      const pts = `${n.x},${y} ${x + n.w},${n.y} ${n.x},${y + n.h} ${x},${n.y}`;
+      nodeSvg += `<polygon points="${pts}" fill="${fill}" stroke="${stroke}" stroke-width="1.5"/>`;
+    } else if (n.shape === 'hex') {
+      const k = 14, pts = `${x + k},${y} ${x + n.w - k},${y} ${x + n.w},${n.y} ${x + n.w - k},${y + n.h} ${x + k},${y + n.h} ${x},${n.y}`;
+      nodeSvg += `<polygon points="${pts}" fill="${fill}" stroke="${stroke}" stroke-width="1.5"/>`;
+    } else if (n.shape === 'circle') {
+      nodeSvg += `<circle cx="${n.x}" cy="${n.y}" r="${n.w / 2}" fill="${fill}" stroke="${stroke}" stroke-width="1.5"/>`;
+    } else if (n.shape === 'db') {
+      const rx = n.w / 2, ry = 7;
+      nodeSvg += `<path d="M${x},${y + ry} v${n.h - ry * 2} a${rx},${ry} 0 0 0 ${n.w},0 v-${n.h - ry * 2}" fill="${fill}" stroke="${stroke}" stroke-width="1.5"/>` +
+        `<ellipse cx="${n.x}" cy="${y + ry}" rx="${rx}" ry="${ry}" fill="${fill}" stroke="${stroke}" stroke-width="1.5"/>`;
+    } else if (n.shape === 'sub') {
+      nodeSvg += `<rect x="${x}" y="${y}" width="${n.w}" height="${n.h}" rx="5" fill="${fill}" stroke="${stroke}" stroke-width="1.5"/>` +
+        `<line x1="${x + 7}" y1="${y}" x2="${x + 7}" y2="${y + n.h}" stroke="${stroke}" stroke-width="1.2"/>` +
+        `<line x1="${x + n.w - 7}" y1="${y}" x2="${x + n.w - 7}" y2="${y + n.h}" stroke="${stroke}" stroke-width="1.2"/>`;
+    } else if (n.shape === 'flag') {
+      const pts = `${x},${y} ${x + n.w},${y} ${x + n.w},${y + n.h} ${x},${y + n.h} ${x + 12},${n.y}`;
+      nodeSvg += `<polygon points="${pts}" fill="${fill}" stroke="${stroke}" stroke-width="1.5"/>`;
+    } else {
+      const rx = n.shape === 'stadium' ? n.h / 2 : n.shape === 'round' ? 10 : 6;
+      nodeSvg += `<rect x="${x}" y="${y}" width="${n.w}" height="${n.h}" rx="${rx}" fill="${fill}" stroke="${stroke}" stroke-width="1.5"/>`;
+    }
+    nodeSvg += mmdTspans(n.x, n.y + (n.shape === 'db' ? 4 : 0), mmdLines(n.label), 17, color);
+  }
+  return mmdSvg(W, H, mid, sgSvg + edgeSvg + nodeSvg);
+}
+// 1. Flowchart / Graph
+function mmdFlow(rawLines) {
+  const first = rawLines.find(l => l.trim()).trim();
+  const dm = first.match(/^(?:flowchart|graph)\s+(TD|TB|BT|LR|RL)\b/i);
+  let dir = dm ? dm[1].toUpperCase() : 'TD';
+  const nodes = new Map(), edges = [], subgraphs = [], sgStack = [], styles = {};
+  const parseStyle = str => {
+    const o = {};
+    str.split(',').forEach(kv => { const [k, v] = kv.split(':').map(x => x && x.trim()); if (k && v && mmdColor(v)) o[k] = v; });
+    return o;
+  };
+  const SHAPES = [
+    [/^\(\(\(([\s\S]*?)\)\)\)/, 'circle'], [/^\(\(([\s\S]*?)\)\)/, 'circle'], [/^\(\[([\s\S]*?)\]\)/, 'stadium'],
+    [/^\[\(([\s\S]*?)\)\]/, 'db'], [/^\[\[([\s\S]*?)\]\]/, 'sub'], [/^\{\{([\s\S]*?)\}\}/, 'hex'],
+    [/^\{([\s\S]*?)\}/, 'diamond'], [/^\(([\s\S]*?)\)/, 'round'], [/^\[([\s\S]*?)\]/, 'rect'], [/^>([\s\S]*?)\]/, 'flag']
+  ];
+  const parseNode = raw => {
+    let s = raw.trim(), cls = '';
+    const cm = s.match(/:::([A-Za-z0-9_-]+)$/); if (cm) { cls = cm[1]; s = s.slice(0, cm.index).trim(); }
+    const im = s.match(/^([A-Za-z0-9_.-]+)(.*)$/); if (!im) return null;
+    const id = im[1], rest = im[2].trim();
+    let label = null, shape = null;
+    for (const [re, sh] of SHAPES) { const m = rest.match(re); if (m) { label = mmdClean(m[1]); shape = sh; break; } }
+    if (!nodes.has(id)) nodes.set(id, { id, label: label ?? id, shape: shape || 'rect', cls });
+    else { const n = nodes.get(id); if (label !== null) n.label = label; if (shape) n.shape = shape; if (cls) n.cls = cls; }
+    for (const sg of sgStack) if (!sg.ids.includes(id)) sg.ids.push(id);
+    return id;
+  };
+  const EDGE_RE = /(<--+[->ox]?|<==+[=>]|<-\.+-[->]|--+\s+([^-\n]+?)\s+--[>ox]|-\.\s+([^.\n]+?)\s+\.-[>ox]|==\s+([^=\n]+?)\s+==>|-\.+-[>ox]?|==+[>]|--+[>ox]?|---)(?:\|([^|]*)\|)?/g;
+  const stmts = rawLines.slice(rawLines.indexOf(rawLines.find(l => l.trim())) + 1).join('\n').split(/[;\n]/);
+  for (const raw of stmts) {
+    const ln = raw.trim(); if (!ln) continue;
+    let m;
+    if ((m = ln.match(/^direction\s+(TD|TB|BT|LR|RL)\b/i))) { dir = m[1].toUpperCase(); continue; }
+    if ((m = ln.match(/^subgraph\s+(?:([A-Za-z0-9_.-]+)\s*\[([^\]]+)\]|(.+))$/i))) {
+      const sg = { title: mmdClean(m[2] || m[3] || m[1]), ids: [] }; subgraphs.push(sg); sgStack.push(sg); continue;
+    }
+    if (/^end$/i.test(ln)) { sgStack.pop(); continue; }
+    if ((m = ln.match(/^classDef\s+([A-Za-z0-9_-]+)\s+(.+)$/i))) { styles[m[1]] = parseStyle(m[2]); continue; }
+    if ((m = ln.match(/^style\s+([A-Za-z0-9_.-]+)\s+(.+)$/i))) { styles['#' + m[1]] = parseStyle(m[2]); continue; }
+    if ((m = ln.match(/^class\s+([^\s]+)\s+([A-Za-z0-9_-]+)$/i))) {
+      m[1].split(',').forEach(id => { const n = nodes.get(id.trim()); if (n) n.cls = m[2]; }); continue;
+    }
+    if (/^(linkStyle|click)\b/i.test(ln)) continue;
+    // split chained edges: A --> B -->|yes| C
+    EDGE_RE.lastIndex = 0;
+    const ops = []; let last = 0;
+    while ((m = EDGE_RE.exec(ln))) { ops.push({ left: ln.slice(last, m.index), op: m[1], label: mmdClean(m[5] || m[2] || m[3] || m[4] || '') }); last = EDGE_RE.lastIndex; }
+    if (!ops.length) { ln.split('&').forEach(parseNode); continue; }
+    const groups = ops.map(o => o.left.split('&').map(parseNode).filter(Boolean));
+    groups.push(ln.slice(last).split('&').map(parseNode).filter(Boolean));
+    for (let i = 0; i < ops.length; i++) {
+      const op = ops[i].op, dash = op.includes('.'), thick = op.includes('=');
+      const mStart = op.startsWith('<') ? 'a' : op.startsWith('o') ? 'o' : op.startsWith('x') ? 'x' : '';
+      const mEnd = op.endsWith('>') ? 'a' : op.endsWith('o') ? 'o' : op.endsWith('x') ? 'x' : '';
+      for (const a of groups[i]) for (const b of groups[i + 1]) edges.push({ from: a, to: b, label: ops[i].label, dash, thick, mStart, mEnd });
+    }
+  }
+  return mmdLayoutGraph(dir, nodes, edges, subgraphs, styles);
+}
+// 2. Sequence Diagram
+function mmdSeqDiag(rawLines) {
+  const parts = [], pMap = new Map(), items = [], stack = [];
+  const ensure = (id, label, actor = false) => {
+    if (!pMap.has(id)) { const p = { id, label: mmdClean(label || id), actor, i: parts.length }; parts.push(p); pMap.set(id, p); }
+    return pMap.get(id);
+  };
+  let m;
+  for (const raw of rawLines.slice(1)) {
+    const ln = raw.trim(); if (!ln || /^(autonumber|title\b|box\b)/i.test(ln)) continue;
+    if ((m = ln.match(/^(participant|actor)\s+([^\s]+)(?:\s+as\s+(.+))?$/i))) { ensure(m[2], m[3] || m[2], m[1].toLowerCase() === 'actor'); continue; }
+    if ((m = ln.match(/^(loop|alt|opt|par|critical|break|rect)\b\s*(.*)$/i))) {
+      const blk = { type: 'block', kind: m[1].toLowerCase(), label: mmdClean(m[2]), start: items.length, divs: [] };
+      stack.push(blk); continue;
+    }
+    if ((m = ln.match(/^(else|and)\b\s*(.*)$/i)) && stack.length) {
+      stack[stack.length - 1].divs.push({ at: items.length, label: mmdClean(m[2]) }); continue;
+    }
+    if (/^end$/i.test(ln) && stack.length) {
+      const blk = stack.pop(); blk.end = items.length; items.push(blk); continue;
+    }
+    if ((m = ln.match(/^note\s+(left of|right of|over)\s+([^:]+):\s*(.*)$/i))) {
+      const who = m[2].split(',').map(s => ensure(s.trim()).i);
+      items.push({ type: 'note', pos: m[1].toLowerCase(), who, text: mmdClean(m[3]) }); continue;
+    }
+    if ((m = ln.match(/^(activate|deactivate)\s+([^\s]+)$/i))) {
+      items.push({ type: m[1].toLowerCase(), p: ensure(m[2]).i }); continue;
+    }
+    if ((m = ln.match(/^([^\s:<>]+?)\s*(--?>>?|--?x|--?\))\s*([+-])?\s*([^\s:]+)\s*:\s*(.*)$/))) {
+      const a = ensure(m[1]).i, b = ensure(m[4]).i;
+      items.push({ type: 'msg', from: a, to: b, arrow: m[2], act: m[3] || '', text: mmdClean(m[5]) });
+    }
+  }
+  if (!parts.length) return null;
+  const colW = Math.max(136, ...parts.map(p => mmdTextW(p.label, 8.2) + 36));
+  const padX = 36, topY = 20, headH = 42, rowH = 44;
+  const xs = parts.map((_, i) => padX + colW / 2 + i * colW);
+  const rows = items.filter(x => x.type === 'msg' || x.type === 'note');
+  const rowY = []; let cy = topY + headH + 28;
+  const idxMap = new Map();
+  let ri = 0;
+  items.forEach((it, idx) => {
+    idxMap.set(idx, cy);
+    if (it.type === 'msg') { rowY[ri++] = cy; cy += it.from === it.to ? 52 : rowH; }
+    else if (it.type === 'note') { rowY[ri++] = cy; cy += Math.max(36, mmdLines(it.text).length * 16 + 22); }
+  });
+  const footY = cy + 16, W = padX * 2 + parts.length * colW, H = footY + headH + 18;
+  const mid = 'm' + (++mmdSeq);
+  let svg = '';
+  // lifelines + headers/footers
+  parts.forEach((p, i) => {
+    const x = xs[i], bw = Math.min(colW - 18, Math.max(84, mmdTextW(p.label, 8) + 26));
+    svg += `<line x1="${x}" y1="${topY + headH}" x2="${x}" y2="${footY}" stroke="var(--line)" stroke-width="1.5" stroke-dasharray="5 4"/>`;
+    const drawBox = y => p.actor
+      ? `<circle cx="${x}" cy="${y + 8}" r="6" fill="none" stroke="var(--acc)" stroke-width="1.6"/>` +
+        `<path d="M${x},${y + 14}v12M${x - 9},${y + 19}h18M${x},${y + 26}l-7,9M${x},${y + 26}l7,9" stroke="var(--acc)" stroke-width="1.6" fill="none"/>` +
+        `<text x="${x}" y="${y + 42}" text-anchor="middle" fill="var(--fg)" font-size="12" font-weight="600">${esc(p.label)}</text>`
+      : `<rect x="${x - bw / 2}" y="${y}" width="${bw}" height="${headH - 6}" rx="8" fill="var(--panel2)" stroke="var(--acc)" stroke-width="1.5"/>` +
+        mmdTspans(x, y + (headH - 6) / 2, mmdLines(p.label), 15, 'var(--fg)', ' font-weight="600"');
+    svg += drawBox(topY) + drawBox(footY);
+  });
+  // blocks behind messages
+  items.filter(x => x.type === 'block').forEach(b => {
+    const y1 = (idxMap.get(b.start) || topY + headH + 12) - 18, y2 = (idxMap.get(b.end) || footY) - 6;
+    const x1 = padX - 12, x2 = W - padX + 12;
+    svg += `<rect x="${x1}" y="${y1}" width="${x2 - x1}" height="${Math.max(28, y2 - y1)}" rx="8" fill="var(--panel2)" fill-opacity=".3" stroke="var(--acc2)" stroke-opacity=".55" stroke-dasharray="4 3"/>`;
+    const tab = `${b.kind}${b.label ? ' [' + b.label + ']' : ''}`;
+    const tw = tab.length * 7 + 16;
+    svg += `<rect x="${x1}" y="${y1}" width="${tw}" height="20" rx="6" fill="var(--bgs)" stroke="var(--acc2)" stroke-opacity=".6"/>` +
+      `<text x="${x1 + 8}" y="${y1 + 10}" dominant-baseline="central" fill="var(--acc2)" font-size="11" font-weight="650">${esc(tab)}</text>`;
+    for (const d of b.divs) {
+      const dy = (idxMap.get(d.at) || y1) - 14;
+      svg += `<line x1="${x1}" y1="${dy}" x2="${x2}" y2="${dy}" stroke="var(--acc2)" stroke-opacity=".5" stroke-dasharray="4 3"/>`;
+      if (d.label) svg += `<text x="${x1 + 10}" y="${dy + 12}" fill="var(--dim)" font-size="11">[${esc(d.label)}]</text>`;
+    }
+  });
+  // messages & notes
+  ri = 0;
+  for (const it of items) {
+    if (it.type === 'msg') {
+      const y = rowY[ri++], x1 = xs[it.from], x2 = xs[it.to];
+      const dash = it.arrow.startsWith('--') ? ' stroke-dasharray="5 4"' : '';
+      const me = it.arrow.endsWith('x') ? 'x' : 'a';
+      if (it.from === it.to) {
+        svg += `<path d="M${x1},${y} H${x1 + 42} V${y + 22} H${x1 + 4}" fill="none" stroke="var(--dim)" stroke-width="1.6"${dash} marker-end="url(#${mid}${me})"/>`;
+        svg += `<text x="${x1 + 48}" y="${y + 11}" dominant-baseline="central" fill="var(--fg)" font-size="12">${esc(it.text)}</text>`;
+      } else {
+        svg += `<line x1="${x1}" y1="${y}" x2="${x2}" y2="${y}" stroke="var(--dim)" stroke-width="1.6"${dash} marker-end="url(#${mid}${me})"/>`;
+        svg += `<text x="${(x1 + x2) / 2}" y="${y - 9}" text-anchor="middle" fill="var(--fg)" font-size="12">${esc(it.text)}</text>`;
+      }
+    } else if (it.type === 'note') {
+      const y = rowY[ri++], ls = mmdLines(it.text), nh = ls.length * 16 + 14;
+      const nw = Math.max(96, mmdTextW(it.text, 7.6) + 20);
+      let nx = xs[it.who[0]] - nw / 2;
+      if (it.pos === 'right of') nx = xs[it.who[0]] + 12;
+      else if (it.pos === 'left of') nx = xs[it.who[0]] - nw - 12;
+      else if (it.who.length > 1) nx = (xs[it.who[0]] + xs[it.who[1]]) / 2 - nw / 2;
+      svg += `<rect x="${nx}" y="${y - 12}" width="${nw}" height="${nh}" rx="6" fill="var(--panel2)" stroke="var(--acc2)" stroke-opacity=".7"/>` +
+        mmdTspans(nx + nw / 2, y - 12 + nh / 2, ls, 16, 'var(--fg)');
+    }
+  }
+  return mmdSvg(W, H, mid, svg);
+}
+// 3. State Diagram
+function mmdState(rawLines) {
+  let dir = 'TD', sCount = 0, eCount = 0;
+  const nodes = new Map(), edges = [];
+  const add = (id, label, shape = 'round') => {
+    if (!nodes.has(id)) nodes.set(id, { id, label: mmdClean(label || id), shape });
+    else if (label) nodes.get(id).label = mmdClean(label);
+    return id;
+  };
+  let m;
+  for (const raw of rawLines.slice(1)) {
+    const ln = raw.trim(); if (!ln || /^(note|end\b|\{|\})/i.test(ln)) continue;
+    if ((m = ln.match(/^direction\s+(TD|TB|BT|LR|RL)\b/i))) { dir = m[1].toUpperCase(); continue; }
+    if ((m = ln.match(/^state\s+"([^"]+)"\s+as\s+([A-Za-z0-9_.-]+)/i))) { add(m[2], m[1]); continue; }
+    if ((m = ln.match(/^(\[\*\]|[A-Za-z0-9_.-]+)\s*-->\s*(\[\*\]|[A-Za-z0-9_.-]+)(?:\s*:\s*(.*))?$/))) {
+      const a = m[1] === '[*]' ? add('__s' + (++sCount), '', 'dot') : add(m[1]);
+      const b = m[2] === '[*]' ? add('__e' + (++eCount), '', 'end') : add(m[2]);
+      edges.push({ from: a, to: b, label: mmdClean(m[3] || ''), mEnd: 'a' }); continue;
+    }
+    if ((m = ln.match(/^([A-Za-z0-9_.-]+)\s*:\s*(.+)$/))) { add(m[1], `${m[1]}\n${m[2]}`); }
+  }
+  return mmdLayoutGraph(dir, nodes, edges);
+}
+// 4. Pie Chart
+function mmdPie(rawLines) {
+  const first = rawLines.find(l => l.trim()).trim();
+  const showData = /showData/i.test(first);
+  let title = ''; const slices = []; let m;
+  for (const raw of rawLines.slice(1)) {
+    const ln = raw.trim(); if (!ln) continue;
+    if ((m = ln.match(/^title\s+(.+)$/i))) { title = mmdClean(m[1]); continue; }
+    if ((m = ln.match(/^"([^"]+)"\s*:\s*([0-9]+(?:\.[0-9]+)?)$/))) slices.push({ label: m[1], v: +m[2] });
+  }
+  const total = slices.reduce((s, x) => s + x.v, 0);
+  if (!slices.length || total <= 0) return null;
+  const r = 92, cx = 120, cy = (title ? 34 : 16) + r + 8;
+  const legW = Math.max(140, ...slices.map(s => (s.label.length + 12) * 7.5));
+  const W = cx + r + 32 + legW, H = Math.max(cy + r + 18, (title ? 40 : 22) + slices.length * 24 + 20);
+  const mid = 'm' + (++mmdSeq);
+  let svg = title ? `<text x="${W / 2}" y="22" text-anchor="middle" fill="var(--fg)" font-size="14" font-weight="700">${esc(title)}</text>` : '';
+  let ang = -Math.PI / 2;
+  slices.forEach((s, i) => {
+    const frac = s.v / total, a2 = ang + frac * Math.PI * 2, col = `hsl(${(i * 137.5 + 252) % 360} 72% 60%)`;
+    const x1 = cx + r * Math.cos(ang), y1 = cy + r * Math.sin(ang), x2 = cx + r * Math.cos(a2), y2 = cy + r * Math.sin(a2);
+    if (frac >= 0.9999) svg += `<circle cx="${cx}" cy="${cy}" r="${r}" fill="${col}" stroke="var(--bgs)" stroke-width="2"/>`;
+    else svg += `<path d="M${cx},${cy} L${x1.toFixed(1)},${y1.toFixed(1)} A${r},${r} 0 ${frac > 0.5 ? 1 : 0} 1 ${x2.toFixed(1)},${y2.toFixed(1)} Z" fill="${col}" stroke="var(--bgs)" stroke-width="2"/>`;
+    if (frac >= 0.06) {
+      const am = (ang + a2) / 2;
+      svg += `<text x="${(cx + r * .62 * Math.cos(am)).toFixed(1)}" y="${(cy + r * .62 * Math.sin(am)).toFixed(1)}" text-anchor="middle" dominant-baseline="central" fill="#fff" font-size="12" font-weight="700">${Math.round(frac * 100)}%</text>`;
+    }
+    const ly = (title ? 44 : 26) + i * 24, lx = cx + r + 28;
+    const txt = `${s.label} (${Math.round(frac * 100)}%${showData ? ' · ' + s.v : ''})`;
+    svg += `<rect x="${lx}" y="${ly - 6}" width="12" height="12" rx="3" fill="${col}"/>` +
+      `<text x="${lx + 18}" y="${ly}" dominant-baseline="central" fill="var(--fg)" font-size="12.5">${esc(txt)}</text>`;
+    ang = a2;
+  });
+  return mmdSvg(W, H, mid, svg);
+}
+// 5. Class Diagram
+function mmdClass(rawLines) {
+  const nodes = new Map(), edges = []; let cur = null, m;
+  const ensure = name => {
+    const id = name.replace(/~.*~/g, '').trim();
+    if (!nodes.has(id)) nodes.set(id, { id, label: id, sections: [[], []] });
+    return nodes.get(id);
+  };
+  const addMember = (c, text) => { const s = text.trim(); if (!s) return; c.sections[s.includes('(') ? 1 : 0].push(s); };
+  for (const raw of rawLines.slice(1)) {
+    const ln = raw.trim(); if (!ln || /^direction\b/i.test(ln)) continue;
+    if (cur) { if (ln === '}') { cur = null; continue; } addMember(cur, ln); continue; }
+    if ((m = ln.match(/^class\s+([A-Za-z0-9_~-]+)\s*\{?$/))) { const c = ensure(m[1]); if (ln.endsWith('{')) cur = c; continue; }
+    if ((m = ln.match(/^([A-Za-z0-9_-]+)\s*(<\|--|\*--|o--|<--|<\|\.\.|<\.\.|--|\.\.)\s*([A-Za-z0-9_-]+)(?:\s*:\s*(.*))?$/) ||
+             ln.match(/^([A-Za-z0-9_-]+)\s*(--\|>|--\*|--o|-->|\.\.\|>|\.\.>)\s*([A-Za-z0-9_-]+)(?:\s*:\s*(.*))?$/))) {
+      ensure(m[1]); ensure(m[3]);
+      const op = m[2], dash = op.includes('.');
+      const ms = op.startsWith('<|') ? 't' : op.startsWith('*') ? 'd' : op.startsWith('o') ? 'h' : op.startsWith('<') ? 'a' : '';
+      const me = op.endsWith('|>') ? 't' : op.endsWith('*') ? 'd' : op.endsWith('o') ? 'h' : op.endsWith('>') ? 'a' : '';
+      edges.push({ from: m[1], to: m[3], label: mmdClean(m[4] || ''), dash, mStart: ms, mEnd: me }); continue;
+    }
+    if ((m = ln.match(/^([A-Za-z0-9_-]+)\s*:\s*(.+)$/))) { addMember(ensure(m[1]), m[2]); }
+  }
+  return mmdLayoutGraph('TD', nodes, edges);
+}
+// 6. ER Diagram
+function mmdEr(rawLines) {
+  const nodes = new Map(), edges = []; let cur = null, m;
+  const ensure = id => { if (!nodes.has(id)) nodes.set(id, { id, label: id, sections: [[]] }); return nodes.get(id); };
+  for (const raw of rawLines.slice(1)) {
+    const ln = raw.trim(); if (!ln) continue;
+    if (cur) { if (ln === '}') { cur = null; continue; } cur.sections[0].push(ln.replace(/\s+/g, ' ')); continue; }
+    if ((m = ln.match(/^([A-Za-z0-9_-]+)\s*\{$/))) { cur = ensure(m[1]); continue; }
+    if ((m = ln.match(/^([A-Za-z0-9_-]+)\s+([|o}{]{2}(?:--|\.\.)[|o}{]{2})\s+([A-Za-z0-9_-]+)\s*:\s*(.+)$/))) {
+      ensure(m[1]); ensure(m[3]);
+      edges.push({ from: m[1], to: m[3], label: mmdClean(m[4]), dash: m[2].includes('..'), mEnd: m[2].includes('{') ? 'o' : 'a' });
+    }
+  }
+  return mmdLayoutGraph('LR', nodes, edges);
+}
+// 7. Mindmap
+function mmdMindmap(rawLines) {
+  const rows = [];
+  for (const raw of rawLines.slice(1)) {
+    if (!raw.trim()) continue;
+    const indent = raw.match(/^\s*/)[0].replace(/\t/g, '  ').length;
+    const label = mmdClean(raw.trim().replace(/^(\(\(|\(\[|\[\[|\(\(|\(|\{|\[)([\s\S]*?)(\)\)|\]\)|\]\]|\)|\}|\])$/, '$2'));
+    rows.push({ indent, label, kids: [] });
+  }
+  if (!rows.length) return null;
+  const root = rows[0], stack = [root];
+  for (let i = 1; i < rows.length; i++) {
+    while (stack.length > 1 && stack[stack.length - 1].indent >= rows[i].indent) stack.pop();
+    stack[stack.length - 1].kids.push(rows[i]); stack.push(rows[i]);
+  }
+  let leafY = 26;
+  const layout = (n, depth, grp) => {
+    n.w = Math.max(70, mmdTextW(n.label, 8) + 26); n.h = 34; n.depth = depth; n.grp = grp;
+    if (!n.kids.length) { n.y = leafY; leafY += 46; return; }
+    n.kids.forEach((k, i) => layout(k, depth + 1, depth === 0 ? i : grp));
+    n.y = (n.kids[0].y + n.kids[n.kids.length - 1].y) / 2;
+  };
+  layout(root, 0, -1);
+  const colW = [];
+  const measureCol = n => { colW[n.depth] = Math.max(colW[n.depth] || 0, n.w); n.kids.forEach(measureCol); };
+  measureCol(root);
+  const colX = []; let cx = 24;
+  colW.forEach((w, d) => { colX[d] = cx + w / 2; cx += w + 46; });
+  const W = cx - 22, H = Math.max(leafY + 8, 90), mid = 'm' + (++mmdSeq);
+  let edges = '', nodes = '';
+  const draw = n => {
+    const x = colX[n.depth], col = n.depth === 0 ? 'var(--acc)' : `hsl(${(n.grp * 137.5 + 252) % 360} 72% 62%)`;
+    for (const k of n.kids) {
+      const kx = colX[k.depth], x1 = x + n.w / 2, x2 = kx - k.w / 2, mx = (x1 + x2) / 2;
+      const kc = n.depth === 0 ? `hsl(${(k.grp * 137.5 + 252) % 360} 72% 62%)` : col;
+      edges += `<path d="M${x1},${n.y} C${mx},${n.y} ${mx},${k.y} ${x2},${k.y}" fill="none" stroke="${kc}" stroke-width="1.8" stroke-opacity=".75"/>`;
+      draw(k);
+    }
+    const rx = n.depth === 0 ? 17 : 10;
+    nodes += `<rect x="${x - n.w / 2}" y="${n.y - n.h / 2}" width="${n.w}" height="${n.h}" rx="${rx}" fill="var(--panel2)" stroke="${col}" stroke-width="${n.depth === 0 ? 2 : 1.5}"/>` +
+      mmdTspans(x, n.y, mmdLines(n.label), 16, 'var(--fg)', n.depth === 0 ? ' font-weight="700"' : '');
+  };
+  draw(root);
+  return mmdSvg(W, H, mid, edges + nodes);
+}
+
 function md(src, id, depth = 0) {
   const savedId = curId, savedToc = TOC;
   curId = id; if (!depth) TOC = [];
-  const blocks = [];
-  src = src.replace(/(^|\n)(```|~~~)[^\n]*\n([\s\S]*?)\n?\2(?=\n|$)/g, (m, p, f, c) => (blocks.push(c), p + '\u0002' + (blocks.length - 1) + '\u0002'));
+  const blocks = [], maths = [];
+  src = src.replace(/(^|\n)(```|~~~)([^\n]*)\n([\s\S]*?)\n?\2(?=\n|$)/g, (m, p, f, lang, c) => (blocks.push({ lang: lang.trim().toLowerCase(), code: c }), p + '\u0002' + (blocks.length - 1) + '\u0002'));
+  src = src.replace(/(^|\n)[ \t]*\$\$[ \t]*\n([\s\S]*?)\n[ \t]*\$\$[ \t]*(?=\n|$)/g, (m, p, c) => (maths.push(c), p + '\u0003' + (maths.length - 1) + '\u0003'));
+  src = src.replace(/(^|\n)[ \t]*\$\$([^\n]+?)\$\$[ \t]*(?=\n|$)/g, (m, p, c) => (maths.push(c), p + '\u0003' + (maths.length - 1) + '\u0003'));
   const L = esc(src).split('\n'), out = []; let i = 0, para = [], m;
   const flush = () => { if (para.length) { out.push('<p>' + inline(para.join('\n')).replace(/\n/g, '<br>') + '</p>'); para = []; } };
   const LI = /^(\s*)([-*+]|\d+[.)])\s+(.*)$/;
   while (i < L.length) {
     const ln = L[i];
     if (/^\s*$/.test(ln)) { flush(); i++; continue; }
-    if ((m = ln.match(/^\u0002(\d+)\u0002$/))) { flush(); out.push('<pre><code>' + esc(blocks[+m[1]]) + '</code></pre>'); i++; continue; }
+    if ((m = ln.match(/^\u0002(\d+)\u0002$/))) {
+      flush(); const b = blocks[+m[1]];
+      const svg = b.lang === 'mermaid' ? renderMermaid(b.code) : null;
+      out.push(svg ? `<div class="mmd">${svg}</div>` : '<pre><code>' + esc(b.code) + '</code></pre>');
+      i++; continue;
+    }
+    if ((m = ln.match(/^\u0003(\d+)\u0003$/))) {
+      flush(); out.push(`<div class="math-blk">${renderTex(maths[+m[1]], true)}</div>`); i++; continue;
+    }
     if ((m = ln.match(/^(#{1,6})\s+(.*)$/))) {
       flush(); const lv = m[1].length, raw = m[2].replace(/\s+#+\s*$/, ''), hid = depth ? '' : 'hd-' + TOC.length;
       if (!depth) TOC.push({ lv, id: hid, text: un(raw).replace(/\[\[(?:[^\]|]*\|)?([^\]]*)\]\]/g, '$1').replace(/\[([^\]]*)\]\([^)]*\)/g, '$1').replace(/[*_`=~]/g, '') });
@@ -565,7 +1343,7 @@ async function showNote(id) {
   const bodyHtml = md(contentOf(n), id), toc = tocHtml(TOC);
   $('#noteBody').innerHTML = `<h1>${esc(n.title)}</h1>
     <div class="meta"><span>${esc(n.id)}.md</span><span>${fmtDate(n.mtime)}</span><span>${n.words} words</span>${chipsFor(n)}
-    <button class="btn" id="toGraph" style="padding:1px 10px">show in graph</button>${LIVE ? `<button class="btn pri" id="bEdit" style="padding:1px 10px">edit</button><button class="btn" id="bRen" style="padding:1px 10px">rename</button><button class="btn danger" id="bDel" style="padding:1px 10px">delete</button>` : ''}</div>
+    <button class="btn" id="toGraph" style="padding:1px 10px">show in graph</button><button class="btn" id="bSlides" style="padding:1px 10px" title="Present as slides (Alt+P)">slides</button>${LIVE ? `<button class="btn pri" id="bEdit" style="padding:1px 10px">edit</button><button class="btn" id="bRen" style="padding:1px 10px">rename</button><button class="btn danger" id="bDel" style="padding:1px 10px">delete</button>` : ''}</div>
     ${propsHtml(n)}<div class="nw"><div class="body">${bodyHtml}</div>${toc}</div>
     <div class="panels">
       <div><h2 class="s">Backlinks (${n.back.length})</h2>${linkList(n.back)}</div>
@@ -573,6 +1351,7 @@ async function showNote(id) {
       ${un.length ? `<div><h2 class="s">Unresolved</h2><ul>${un.map(t => `<li class="ghost">${esc(t)}</li>`).join('')}</ul></div>` : ''}
     </div>`;
   $('#toGraph').onclick = () => { G.focus = id; $('#gdepth').value = G.depth = G.depth || 2; location.hash = 'graph'; };
+  $('#bSlides').onclick = () => openSlides(id);
   if (LIVE) { $('#bEdit').onclick = () => location.hash = 'e/' + encodeURIComponent(id); $('#bRen').onclick = () => renameNote(id); $('#bDel').onclick = () => deleteNote(id); }
   $('#tnote').style.display = ''; $('#tnoteT').textContent = n.title.length > 24 ? n.title.slice(0, 23) + '…' : n.title;
   showView('note'); markActive(); $('#v-note').scrollTop = 0; spy(); $('#side').classList.remove('open');
@@ -1179,7 +1958,8 @@ if (LIVE) {
   window.addEventListener('beforeunload', e => { if (ED.dirty) { e.preventDefault(); e.returnValue = ''; } });
   [['B', () => wrap('**', '**', 'bold')], ['I', () => wrap('*', '*', 'italic')], ['H', () => linePrefix('## ')], ['• list', () => linePrefix('- ')],
    ['☐ task', () => linePrefix('- [ ] ')], ['[[link]]', () => wrap('[[', ']]', 'note')], ['code', () => wrap('`', '`', 'code')],
-   ['block', () => wrap('```\n', '\n```', '')], ['#tag', () => wrap('#', '', 'tag')]
+   ['block', () => wrap('```\n', '\n```', '')], ['#tag', () => wrap('#', '', 'tag')],
+   ['∑ math', () => wrap('$', '$', 'x^2')], ['◇ mermaid', () => wrap('```mermaid\n', '\n```', 'flowchart LR\n  A[Start] --> B[End]')]
   ].forEach(([l, f]) => { const b = el('button', '', l); b.type = 'button'; b.onclick = f; $('#tb').appendChild(b); });
   const imgBtn = el('button', '', '&#128444; image'); imgBtn.type = 'button'; imgBtn.title = 'Insert images (or paste / drop them)';
   imgBtn.onclick = () => $('#imgpick').click(); $('#tb').appendChild(imgBtn);
@@ -1191,23 +1971,47 @@ if (LIVE) {
   const LV = window.LV = { on: true, blocks: [], act: -1, render: o => lvRender(o) };
   try { LV.on = localStorage.getItem('fo-editor') !== 'source'; } catch (e) { /* storage unavailable */ }
   const SEP = /^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$/;
-  // blocks = lines, except fenced code, quotes/callouts, tables and front matter, which stay together
+  // blocks = lines, except fenced code, display math ($$), quotes/callouts, tables and front matter, which stay together
   function lvSegment(text) {
     const L = text.split('\n'), out = []; let i = 0, m;
     if (L[0] === '---') { const j = L.indexOf('---', 1); if (j > 0) { out.push(L.slice(0, j + 1).join('\n')); i = j + 1; } }
     while (i < L.length) {
       const ln = L[i]; let j = i + 1;
       if ((m = ln.match(/^\s*(```|~~~)/))) { while (j < L.length && !L[j].trim().startsWith(m[1])) j++; j = Math.min(j + 1, L.length); }
+      else if (/^\s*\$\$\s*$/.test(ln)) { while (j < L.length && !/^\s*\$\$\s*$/.test(L[j])) j++; j = Math.min(j + 1, L.length); }
       else if (/^>/.test(ln)) { while (j < L.length && /^>/.test(L[j])) j++; }
       else if (ln.includes('|') && L[i + 1] !== undefined && SEP.test(L[i + 1])) { j = i + 2; while (j < L.length && L[j].includes('|') && L[j].trim()) j++; }
       out.push(L.slice(i, j).join('\n')); i = j;
     }
     return out;
   }
-  const lvKind = b => { const h = b.match(/^(#{1,3})\s/); return h ? 'h' + h[1].length : /^\s*(```|~~~)|^---\n/.test(b) ? 'code' : ''; };
+  const lvKind = b => { const h = b.match(/^(#{1,3})\s/); return h ? 'h' + h[1].length : /^\s*(```|~~~|\$\$)|^---\n/.test(b) ? 'code' : ''; };
   const lvStart = k => LV.blocks.slice(0, k).reduce((n, b) => n + b.length + 1, 0);
   const fit = t => { t.style.height = 'auto'; t.style.height = t.scrollHeight + 'px'; };
   const lvPid = () => ED.id || $('#edpath').value.trim().replace(/\.md$/i, '');
+  function lvUpdatePreview(d, v) {
+    let pv = d.querySelector('.lv-pv');
+    const isMmd = /^\s*(```|~~~)mermaid\b/i.test(v);
+    const isMath = /^\s*\$\$/.test(v) || /\$(?!\s)[^$\n]+?(?<!\s)\$/.test(v);
+    let html = '', lbl = '';
+    if (isMmd) {
+      const body = v.replace(/^\s*(```|~~~)mermaid[^\n]*\n?/i, '').replace(/\n?\s*(```|~~~)\s*$/, '');
+      const svg = renderMermaid(body);
+      lbl = 'Mermaid preview';
+      html = svg ? `<div class="mmd">${svg}</div>` : '<span style="color:var(--dim);font-size:12px">Type a valid flowchart, sequence, state, class, ER, pie or mindmap diagram…</span>';
+    } else if (isMath) {
+      lbl = 'LaTeX preview';
+      if (/^\s*\$\$/.test(v)) {
+        const body = v.replace(/^\s*\$\$\s*/, '').replace(/\s*\$\$\s*$/, '');
+        html = body ? `<div class="math-blk">${renderTex(body, true)}</div>` : '';
+      } else {
+        html = md(v, lvPid(), 1);
+      }
+    }
+    if (!html) { if (pv) pv.remove(); return; }
+    if (!pv) { pv = el('div', 'lv-pv'); d.appendChild(pv); }
+    pv.innerHTML = `<div class="lv-pv-lbl">${lbl}</div>` + html;
+  }
   function lvBlock(b, k, pid) {
     const d = el('div', 'lv-b'); d.dataset.k = k;
     if (k === 0 && /^---\n[\s\S]*\n---$/.test(b)) d.innerHTML = `<div class="lv-fm">${esc(b)}</div>`;
@@ -1231,8 +2035,8 @@ if (LIVE) {
     const d = live.children[k]; if (!d) return;
     const t = el('textarea', 'lv-ta ' + lvKind(LV.blocks[k])); t.value = LV.blocks[k]; t.spellcheck = false; t.rows = 1;
     d.replaceChildren(t); d.classList.add('on'); LV.act = k; ta = t;
-    t.addEventListener('keydown', lvKeys); bindTA(t); t.addEventListener('input', () => fit(t));
-    fit(t); t.focus({ preventScroll: true }); t.setSelectionRange(caret, caret);
+    t.addEventListener('keydown', lvKeys); bindTA(t); t.addEventListener('input', () => { fit(t); lvUpdatePreview(d, t.value); });
+    fit(t); lvUpdatePreview(d, t.value); t.focus({ preventScroll: true }); t.setSelectionRange(caret, caret);
     const r = d.getBoundingClientRect(), v = live.getBoundingClientRect();
     if (r.top < v.top || r.bottom > v.bottom) d.scrollIntoView({ block: 'nearest' });
   }
@@ -1240,6 +2044,7 @@ if (LIVE) {
     if (LV.act < 0 || ta === srcTA) return;
     LV.blocks[LV.act] = ta.value; srcTA.value = LV.blocks.join('\n');
     ta.className = 'lv-ta ' + lvKind(ta.value); fit(ta);
+    const d = live.children[LV.act]; if (d) lvUpdatePreview(d, ta.value);
   }
   // replace the note text and keep editing at `offset`
   function lvSet(text, offset) { srcTA.value = text; ED.dirty = true; lvRender(offset); }
@@ -1253,7 +2058,7 @@ if (LIVE) {
     const ls = v.lastIndexOf('\n', p - 1) + 1, le = v.indexOf('\n', p) < 0 ? v.length : v.indexOf('\n', p), line = v.slice(ls, le);
     const put = (text, caret) => lvSet(all.slice(0, st) + text + all.slice(st + v.length), st + caret);
     const isTable = v.includes('\n') && SEP.test(v.split('\n')[1] || '');
-    const fence = /^\s*(```|~~~)/.test(v);
+    const fence = /^\s*(```|~~~|\$\$)/.test(v);
     let m;
     // Tab / Shift+Tab: indent or outdent a list item
     if (e.key === 'Tab' && plain && LIST.test(line)) {
@@ -1340,6 +2145,7 @@ if (LIVE) {
   }
   // where in the block's markdown a click on its rendered text lands
   function lvClickOffset(d, e, raw) {
+    if (e.target.closest('.mmd, .math-blk')) { const nl = raw.indexOf('\n'); return nl >= 0 ? nl + 1 : raw.length; }
     const r = document.caretRangeFromPoint && document.caretRangeFromPoint(e.clientX, e.clientY);
     if (!r || !d.contains(r.startContainer)) return raw.length;
     const pre = document.createRange(); pre.setStart(d, 0); pre.setEnd(r.startContainer, r.startOffset);
@@ -1433,18 +2239,80 @@ if (LIVE) {
   document.addEventListener('keydown', e => { if (e.altKey && !e.ctrlKey && !e.metaKey && e.key.toLowerCase() === 'd') { e.preventDefault(); openToday(); } });
 }
 
+/* ---------- slides: Obsidian-style deck split on `---` ---------- */
+const SL = { open: false, id: null, slides: [], i: 0 };
+function splitSlides(src) {
+  const out = [], cur = []; let fence = null;
+  for (const ln of src.replace(/\r\n?/g, '\n').split('\n')) {
+    const fm = ln.match(/^\s*(```|~~~)/);
+    if (fm) { fence = fence && ln.trim().startsWith(fence) ? null : (fence || fm[1]); cur.push(ln); continue; }
+    if (!fence && /^\s*---\s*$/.test(ln)) { out.push(cur.join('\n').trim()); cur.length = 0; continue; }
+    cur.push(ln);
+  }
+  out.push(cur.join('\n').trim());
+  const clean = out.filter(Boolean);
+  return clean.length ? clean : [''];
+}
+function showSlide(i) {
+  SL.i = Math.max(0, Math.min(i, SL.slides.length - 1));
+  $('#slCard').innerHTML = md(SL.slides[SL.i], SL.id, 1);
+  $('#slCnt').textContent = `${SL.i + 1} / ${SL.slides.length}`;
+  $('#slPrev').disabled = SL.i === 0;
+  $('#slNext').disabled = SL.i === SL.slides.length - 1;
+  $('#slBar').style.width = ((SL.i + 1) / SL.slides.length * 100) + '%';
+  $('#slides .sl-stage').scrollTop = 0;
+}
+function openSlides(id) {
+  const n = byId.get(id || curNote); if (!n) return;
+  const raw = contentOf(n).replace(/^---[ \t]*\r?\n[\s\S]*?\r?\n---[ \t]*(?:\r?\n|$)/, '');
+  SL.id = n.id; SL.slides = splitSlides(raw); SL.open = true;
+  const box = $('#slides'); box.classList.add('open'); box.setAttribute('aria-hidden', 'false');
+  showSlide(0);
+}
+function closeSlides() {
+  if (!SL.open) return;
+  SL.open = false;
+  const box = $('#slides'); box.classList.remove('open'); box.setAttribute('aria-hidden', 'true');
+  try { if (document.fullscreenElement) document.exitFullscreen(); } catch (e) { /* unsupported */ }
+}
+$('#slPrev').onclick = () => showSlide(SL.i - 1);
+$('#slNext').onclick = () => showSlide(SL.i + 1);
+$('#slClose').onclick = closeSlides;
+$('#slFs').onclick = () => {
+  try {
+    if (!document.fullscreenElement) $('#slides').requestFullscreen().catch(() => {});
+    else document.exitFullscreen();
+  } catch (e) { /* unsupported */ }
+};
+$('#slCard').addEventListener('click', e => { if (e.target.closest('a.wl')) closeSlides(); });
+document.addEventListener('keydown', e => {
+  if (SL.open) {
+    if (e.key === 'Escape') { e.preventDefault(); closeSlides(); }
+    else if (e.key === 'ArrowRight' || e.key === 'ArrowDown' || e.key === 'PageDown' || e.key === ' ') { e.preventDefault(); showSlide(SL.i + 1); }
+    else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp' || e.key === 'PageUp') { e.preventDefault(); showSlide(SL.i - 1); }
+    else if (e.key === 'Home') { e.preventDefault(); showSlide(0); }
+    else if (e.key === 'End') { e.preventDefault(); showSlide(SL.slides.length - 1); }
+    else if (!e.ctrlKey && !e.metaKey && !e.altKey && e.key.toLowerCase() === 'f') { e.preventDefault(); $('#slFs').click(); }
+    return;
+  }
+  if (e.altKey && !e.ctrlKey && !e.metaKey && e.key.toLowerCase() === 'p' && $('#v-note').classList.contains('active') && curNote) {
+    e.preventDefault(); openSlides(curNote);
+  }
+});
+
 /* ---------- focus mode: Ctrl+F shows the current note full screen, again restores the columns ---------- */
 function setFocus(on) {
   document.body.classList.toggle('focus', on);
   try { if (on && !document.fullscreenElement) document.documentElement.requestFullscreen().catch(() => {}); else if (!on && document.fullscreenElement) document.exitFullscreen(); } catch (e) { /* unsupported */ }
 }
 document.addEventListener('keydown', e => {
+  if (SL.open) return;
   const noteOpen = $('#v-note').classList.contains('active'), on = document.body.classList.contains('focus');
   if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'f' && (noteOpen || on)) { e.preventDefault(); setFocus(!on); }
   else if (e.key === 'Escape' && on) setFocus(false);
 });
 document.addEventListener('fullscreenchange', () => { if (!document.fullscreenElement) document.body.classList.remove('focus'); });
-{ const sv = showView; showView = v => { if (v !== 'note') setFocus(false); sv(v); }; }
+{ const sv = showView; showView = v => { if (v !== 'note') { setFocus(false); closeSlides(); } sv(v); }; }
 
 /* ---------- boot ---------- */
 BOOT.then(d => {

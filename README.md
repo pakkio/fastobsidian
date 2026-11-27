@@ -42,7 +42,8 @@ in CI on every push; on Linux it needs a desktop session (the D-Bus session bus 
 - **Index** – stats, tag cloud, most connected / recently modified notes, orphans, unresolved links, sortable A–Z table
 - **Graph** – force-directed canvas: pan, zoom, drag, hover highlight, click to open, focus on a note (1–3 hops), colour by cluster or folder, filter by tag, spread slider, unresolved links as ghost nodes
 - **Search** – folder tree plus full-text search with snippets, ranked by name, alias, tag, then body; click a tag to filter
-- **Notes** – rendered markdown (headings, lists, tasks, tables, code, callouts, highlights, tags), backlinks and outgoing links
+- **Notes** – rendered markdown (headings, lists, tasks, tables, code, callouts, highlights, tags), built-in **Mermaid** diagrams (flowchart, sequence, state, class, ER, pie, mindmap) and **LaTeX** math (`$…$` and `$$…$$` via native MathML), backlinks and outgoing links
+- **Slides** – present any note as a keyboard-navigated slide deck split on `---` (`slides` button or `Alt+P`), including images, Mermaid diagrams and LaTeX math
 - **Navigation** – both `[[wikilinks]]` (with `#headings`, `|display` text, and frontmatter `aliases` as link targets) and standard `[text](path/note.md)` links, relative or vault-root
 - **Focus mode** – Ctrl+F on a note hides the columns and goes full screen; press again (or Esc) to restore them
 - **Table of contents** – clickable per-note TOC that tracks your scroll position
@@ -131,11 +132,12 @@ Each note has **edit**, **rename** and **delete** buttons, and the sidebar has *
 
 - **Live editor** (default; the toolbar's Live / Source button switches to source + preview, and the choice is
   remembered): every line is rendered; click a line to edit its markdown, with the caret where you clicked (also
-  inside bold text or a link's display text). Enter continues lists, numbered lists and tasks (on an empty item it
-  outdents, then ends the list); Tab / Shift+Tab indent and outdent a list item. In quotes and callouts Enter keeps
-  the `>` prefix, and Enter on an empty quote line ends the quote. In tables Tab and Shift+Tab move between cells and
-  Enter adds a row. Backspace at the start of a line joins it to the one above, arrow keys move between lines, Esc
-  stops editing. Click a task's box to tick it; Ctrl+click follows a link.
+  inside bold text or a link's display text). Clicking a Mermaid diagram or LaTeX math block edits its source with a
+  live preview underneath (toolbar buttons `∑ math` and `◇ mermaid` insert templates). Enter continues lists,
+  numbered lists and tasks (on an empty item it outdents, then ends the list); Tab / Shift+Tab indent and outdent a
+  list item. In quotes and callouts Enter keeps the `>` prefix, and Enter on an empty quote line ends the quote. In
+  tables Tab and Shift+Tab move between cells and Enter adds a row. Backspace at the start of a line joins it to the
+  one above, arrow keys move between lines, Esc stops editing. Click a task's box to tick it; Ctrl+click follows a link.
 - **Today's note** (sidebar button or Alt+D): opens today's daily note in the editor, creating it if needed, with the
   folder, date format and template from `.obsidian/daily-notes.json` (`{{title}}`, `{{date}}`, `{{time}}`,
   `{{date:FORMAT}}` are filled in). Without settings it is `YYYY-MM-DD.md` at the top of the vault.
