@@ -1,0 +1,11 @@
+{
+  "name": "fastobsidian-e2e",
+  "private": true,
+  "description": "Browser tests of the fastobsidian page (index, search, notes, graph, live editor) against `fastobsidian --serve`",
+  "scripts": {
+    "test": "playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.64.1"
+  }
+}

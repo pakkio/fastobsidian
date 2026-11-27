@@ -17,3 +17,8 @@ static:
 # Tests
 test:
     cargo test
+
+# Browser tests with the installed Edge (no browser download)
+e2e:
+    cargo build
+    cd e2e; npm ci; $env:PW_CHANNEL = "msedge"; npx playwright test --project=chromium

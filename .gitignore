@@ -3,3 +3,8 @@ __pycache__/
 *.pyc
 
 /target/
+
+# browser tests
+e2e/node_modules/
+e2e/test-results/
+e2e/playwright-report/
