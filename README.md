@@ -1,8 +1,40 @@
 # fastobsidian
 
-A quick explorer and editor for an [Obsidian](https://obsidian.md) vault, in its own window.
-One Rust program: it opens the vault in a native window that uses the system's web view
-(WebView2 on Windows, WebKit on macOS and Linux), so no external browser is involved. No network calls.
+**Your [Obsidian](https://obsidian.md) vault, open in a blink.** A native explorer and editor for the same Markdown
+files Obsidian uses, plus a built-in MCP server so AI agents can search, read and write your notes.
+
+- **Instant**: 40,000 notes open in about 0.2 s (0.9 s on the very first start), with search, graph and backlinks ready.
+- **Native and small**: one 4 MB program, no installer, no Electron, no account, no network calls. It uses the
+  system's web view (WebView2 on Windows, WebKit on macOS and Linux).
+- **AI-ready**: `fastobsidian VAULT --mcp` gives agents search, read, write/append, index, backlinks, rename and delete
+  over stdio.
+- **Same files, no lock-in**: it reads and writes the vault in place, follows Obsidian's daily-note, attachment and
+  theme settings, and picks up changes made in Obsidian within a second.
+
+![The live editor: every line rendered, the line being edited shown as markdown](docs/editor.gif)
+
+| Index | Note | Graph |
+|---|---|---|
+| ![Index with stats, tags and lists](docs/index.png) | ![A note with a callout, tags and backlinks](docs/note.png) | ![The link graph](docs/graph.png) |
+
+### Speed
+
+Measured on a vault of 40,000 notes (about 2 KB and 40 links each) on a 16-thread Windows 11 PC, release build:
+
+| | time to index |
+|---|---|
+| first start (every note read and parsed, on all cores) | 0.9 s |
+| later starts (on-disk cache, only changed notes re-read) | 0.2 s |
+| 1.0.0, for comparison | 8.2 s |
+
+What is left on a first start is mostly Windows opening 40,000 files. After an edit only the changed notes are read again.
+
+### Download
+
+Windows: the single `.exe` from [Releases](https://github.com/pakkio/fastobsidian/releases). It is not code-signed,
+so SmartScreen may warn on first launch ("More info" > "Run anyway"); compare it with the release's `SHA256SUMS`.
+macOS and Linux: build from source (below). The app window is started and screenshotted on Windows, macOS and Linux
+in CI on every push; on Linux it needs a desktop session (the D-Bus session bus every desktop provides).
 
 
 ## Features
@@ -44,7 +76,7 @@ fastobsidian /path/to/vault -o explorer.html   # write a self-contained read-onl
 fastobsidian /path/to/vault --mcp              # MCP server on stdio
 ```
 
-Options: `--theme` (use the vault's Obsidian theme, see below), `--watch SECONDS` (how often the vault is checked for
+Options: `--theme` (use the vault's Obsidian theme, see below), `--no-cache` (no index cache), `--watch SECONDS` (how often the vault is checked for
 outside changes while a window or page is open, default 1; `0` turns it off), `--port N` (for `--serve`, default 8765),
 `-o FILE` (static output), `--help`, `--version`. Try it with the bundled `sample-vault/`.
 
@@ -98,9 +130,12 @@ Each note has **edit**, **rename** and **delete** buttons, and the sidebar has *
 (path like `Folder/Name`). Ctrl+S saves; Ctrl+O switches to another vault; a toolbar inserts bold, italic, headings, lists, tasks, `[[links]]`, code and tags.
 
 - **Live editor** (default; the toolbar's Live / Source button switches to source + preview, and the choice is
-  remembered): every line is rendered; click a line to edit its markdown, with the caret where you clicked. Enter
-  continues lists and tasks (an empty item ends the list), Backspace at the start of a line joins it to the one above,
-  arrow keys move between lines, Esc stops editing. Click a task's box to tick it; Ctrl+click follows a link.
+  remembered): every line is rendered; click a line to edit its markdown, with the caret where you clicked (also
+  inside bold text or a link's display text). Enter continues lists, numbered lists and tasks (on an empty item it
+  outdents, then ends the list); Tab / Shift+Tab indent and outdent a list item. In quotes and callouts Enter keeps
+  the `>` prefix, and Enter on an empty quote line ends the quote. In tables Tab and Shift+Tab move between cells and
+  Enter adds a row. Backspace at the start of a line joins it to the one above, arrow keys move between lines, Esc
+  stops editing. Click a task's box to tick it; Ctrl+click follows a link.
 - **Today's note** (sidebar button or Alt+D): opens today's daily note in the editor, creating it if needed, with the
   folder, date format and template from `.obsidian/daily-notes.json` (`{{title}}`, `{{date}}`, `{{time}}`,
   `{{date:FORMAT}}` are filled in). Without settings it is `YYYY-MM-DD.md` at the top of the vault.
@@ -133,6 +168,25 @@ of the index and refused by read and write (`MAX_NOTE_BYTES`).
 - Attachments (images, PDF, audio, video) are detected and resolved by the index; the file type list is `MEDIA_EXT` in `src/vault.rs`.
 - `explorer.html` embeds your vault's content; it is gitignored by default, so do not commit or share it unintentionally.
 
+## Tests
+
+```bash
+cargo test                                         # index, parsing, note operations, server, MCP
+cd e2e && npm ci && npx playwright install && npx playwright test   # the page in Chromium and WebKit
+```
+
+The browser tests (`e2e/`) start `fastobsidian --serve` on a copy of `sample-vault/` and check the index, search, note
+view, graph and the live editor (lists, quotes, tables, clicks, tasks, image paste, today's note). With Edge installed,
+`PW_CHANNEL=msedge npx playwright test --project=chromium` runs them without downloading a browser.
+GitHub Actions runs `cargo test` and the browser tests on Windows, macOS and Linux, and starts the real app window on
+all three, keeping a screenshot of each run. `node e2e/screenshots.js` regenerates the images in `docs/`.
+
+## Code signing
+
+Release builds are not signed yet. Options for an open-source project: [SignPath](https://signpath.org) (free for
+OSS, signs in CI), Azure Trusted Signing (low monthly cost, needs an identity check), or a standard code-signing
+certificate. Each needs the maintainer's own account, so it is not set up in this repository.
+
 ## Files
 
 | File | Purpose |
@@ -143,7 +197,11 @@ of the index and refused by read and write (`MAX_NOTE_BYTES`).
 | `src/server.rs`, `src/page.rs`, `src/mcp.rs` | Local server and live events, page and themes, MCP server |
 | `explorer_template.html` | UI (index, graph, note view, editor), built into the binary |
 | `sample-vault/` | Demo notes |
-| `tests/` | `cargo test`, run by GitHub Actions on Linux, Windows and macOS |
+| `build.rs`, `src/icon.rs` | The app icon, drawn in code and embedded in the Windows .exe |
+| `src/cache.rs`, `src/daily.rs` | Index cache; daily notes and attachments |
+| `tests/` | `cargo test` |
+| `e2e/` | Browser tests (Playwright) and the README screenshot script |
+| `docs/` | README images |
 
 ## License
 
