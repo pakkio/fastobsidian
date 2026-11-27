@@ -60,7 +60,9 @@ test('Mermaid diagrams render as SVG across diagram types and fall back safely',
   const svgs = page.locator('#noteBody .mmd svg');
   await expect(svgs).toHaveCount(6);
   for (let i = 0; i < 6; i++) {
-    const box = await svgs.nth(i).boundingBox();
+    const svg = svgs.nth(i);
+    await expect(svg).toBeVisible();
+    const box = await svg.boundingBox();
     expect(box.width).toBeGreaterThan(80);
     expect(box.height).toBeGreaterThan(40);
   }
