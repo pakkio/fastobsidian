@@ -1222,7 +1222,7 @@ if (LIVE) {
     const d = live.children[k]; if (!d) return;
     const t = el('textarea', 'lv-ta ' + lvKind(LV.blocks[k])); t.value = LV.blocks[k]; t.spellcheck = false; t.rows = 1;
     d.replaceChildren(t); d.classList.add('on'); LV.act = k; ta = t;
-    bindTA(t); t.addEventListener('keydown', lvKeys); t.addEventListener('input', () => fit(t));
+    t.addEventListener('keydown', lvKeys); bindTA(t); t.addEventListener('input', () => fit(t));
     fit(t); t.focus({ preventScroll: true }); t.setSelectionRange(caret, caret);
     const r = d.getBoundingClientRect(), v = live.getBoundingClientRect();
     if (r.top < v.top || r.bottom > v.bottom) d.scrollIntoView({ block: 'nearest' });
@@ -1234,33 +1234,71 @@ if (LIVE) {
   }
   // replace the note text and keep editing at `offset`
   function lvSet(text, offset) { srcTA.value = text; ED.dirty = true; lvRender(offset); }
+  const LIST = /^(\s*)([-*+]|(\d+)([.)]))(\s+)(\[[ xX]\]\s+)?/;
+  const cellsOf = r => r.trim().replace(/^\||\|$/g, '').split('|').length;
   function lvKeys(e) {
     if (e.defaultPrevented || e.isComposing) return;
-    const t = e.target, k = LV.act, v = t.value, p = t.selectionStart, q = t.selectionEnd, st = lvStart(k);
-    const single = !v.includes('\n') && !/^\s*(```|~~~)/.test(v);
-    if (e.key === 'Enter' && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey && single) {
+    const t = e.target, k = LV.act, v = t.value, p = t.selectionStart, q = t.selectionEnd, st = lvStart(k), all = srcTA.value;
+    const plain = !e.ctrlKey && !e.metaKey && !e.altKey;
+    // the line the caret is on, inside this block
+    const ls = v.lastIndexOf('\n', p - 1) + 1, le = v.indexOf('\n', p) < 0 ? v.length : v.indexOf('\n', p), line = v.slice(ls, le);
+    const put = (text, caret) => lvSet(all.slice(0, st) + text + all.slice(st + v.length), st + caret);
+    const isTable = v.includes('\n') && SEP.test(v.split('\n')[1] || '');
+    const fence = /^\s*(```|~~~)/.test(v);
+    let m;
+    // Tab / Shift+Tab: indent or outdent a list item
+    if (e.key === 'Tab' && plain && LIST.test(line)) {
       e.preventDefault();
-      const before = v.slice(0, p), after = v.slice(q);
-      const m = before.match(/^(\s*)([-*+]|(\d+)([.)]))(\s+)(\[[ xX]\]\s+)?/);
-      if (m && !v.slice(m[0].length).trim()) return lvSet(srcTA.value.slice(0, st) + srcTA.value.slice(st + v.length), st); // empty item ends the list
-      let pre = '';
-      if (m) pre = m[1] + (m[3] ? (+m[3] + 1) + m[4] : m[2]) + m[5] + (m[6] ? '[ ] ' : '');
-      else if (/^>\s?/.test(before)) pre = '> ';
-      const all = srcTA.value;
-      return lvSet(all.slice(0, st) + before + '\n' + pre + after + all.slice(st + v.length), st + before.length + 1 + pre.length);
+      if (e.shiftKey) { const cut = (line.match(/^ {1,2}|^\t/) || [''])[0]; return put(v.slice(0, ls) + line.slice(cut.length) + v.slice(le), Math.max(ls, p - cut.length)); }
+      return put(v.slice(0, ls) + '  ' + v.slice(ls), p + 2);
+    }
+    // tables: Tab / Shift+Tab move between cells, Enter (or Tab in the last cell) adds a row below
+    if (isTable && plain && (e.key === 'Tab' || (e.key === 'Enter' && !e.shiftKey))) {
+      e.preventDefault();
+      const lastCell = !line.slice(p - ls).replace(/\|\s*$/, '').includes('|');
+      if (e.key === 'Enter' || (!e.shiftKey && le === v.length && lastCell)) {
+        const row = '|' + '  |'.repeat(cellsOf(v.split('\n')[0]));
+        return put(v.slice(0, le) + '\n' + row + v.slice(le), le + 3);
+      }
+      if (e.shiftKey) {
+        const i = v.lastIndexOf('|', Math.max(0, p - 2)), j = i > 0 ? v.lastIndexOf('|', i - 1) : -1;
+        const at = Math.min(j + 2, v.length); t.setSelectionRange(at, at); return;
+      }
+      const i = v.indexOf('|', p), at = i < 0 ? v.length : Math.min(i + 2, v.length);
+      t.setSelectionRange(at, at); return;
+    }
+    if (e.key === 'Enter' && !e.shiftKey && plain && !fence) {
+      // quotes and callouts: continue with the same '>' prefix; Enter on an empty quote line ends the quote
+      if ((m = line.match(/^((?:>\s?)+)/))) {
+        e.preventDefault();
+        if (!line.slice(m[1].length).trim() && p === le) return put(v.slice(0, ls) + v.slice(le), ls);
+        const pre = m[1].replace(/\s?$/, ' ');
+        return put(v.slice(0, p) + '\n' + pre + v.slice(q), p + 1 + pre.length);
+      }
+      if (!v.includes('\n')) {
+        e.preventDefault();
+        const before = v.slice(0, p), after = v.slice(q);
+        m = before.match(LIST);
+        if (m && !v.slice(m[0].length).trim()) {   // an empty item: outdent it, or end the list
+          if (m[1]) return put(v.replace(/^ {1,2}|^\t/, ''), Math.max(0, p - Math.min(2, m[1].length)));
+          return put('', 0);
+        }
+        const pre = m ? m[1] + (m[3] ? (+m[3] + 1) + m[4] : m[2]) + m[5] + (m[6] ? '[ ] ' : '') : '';
+        return put(before + '\n' + pre + after, before.length + 1 + pre.length);
+      }
     }
     if (e.key === 'Backspace' && p === 0 && q === 0 && k > 0) {
-      e.preventDefault(); const all = srcTA.value;
+      e.preventDefault();
       return lvSet(all.slice(0, st - 1) + all.slice(st), st - 1);
     }
     if (e.key === 'Delete' && p === v.length && q === p && k < LV.blocks.length - 1) {
-      e.preventDefault(); const all = srcTA.value, end = st + v.length;
+      e.preventDefault(); const end = st + v.length;
       return lvSet(all.slice(0, end) + all.slice(end + 1), end);
     }
-    const col = p - (v.lastIndexOf('\n', p - 1) + 1);
+    const col = p - ls;
     if (e.key === 'ArrowUp' && !v.slice(0, p).includes('\n') && k > 0) {
-      e.preventDefault(); const prev = LV.blocks[k - 1], ls = prev.lastIndexOf('\n') + 1;
-      return lvRender(st - prev.length - 1 + ls + Math.min(col, prev.length - ls));
+      e.preventDefault(); const prev = LV.blocks[k - 1], ps = prev.lastIndexOf('\n') + 1;
+      return lvRender(st - prev.length - 1 + ps + Math.min(col, prev.length - ps));
     }
     if (e.key === 'ArrowDown' && !v.slice(p).includes('\n') && k < LV.blocks.length - 1) {
       e.preventDefault(); const next = LV.blocks[k + 1], first = next.split('\n')[0];
@@ -1270,12 +1308,38 @@ if (LIVE) {
     if (e.key === 'ArrowRight' && p === v.length && q === p && k < LV.blocks.length - 1) { e.preventDefault(); return lvRender(st + v.length + 1); }
     if (e.key === 'Escape') { e.preventDefault(); lvRender(); }
   }
+  // positions in `raw` of the characters that show when the line is rendered (markup, link targets and
+  // list/heading/quote markers do not show; an ordered list's number does)
+  function lvVisible(raw) {
+    const vis = [], keep = (from, to) => { for (let j = from; j < to; j++) vis.push(j); };
+    let i = 0, m;
+    if ((m = raw.match(/^(\s*)(\d+[.)])(\s+)/))) { keep(m[1].length, m[1].length + m[2].length); i = m[0].length; }
+    else if ((m = raw.match(/^(\s*([-*+])\s+(\[[ xX]\]\s+)?|#{1,6}\s+|(>\s?)+(\[!\w+\][+-]?\s*)?)/))) i = m[0].length;
+    while (i < raw.length) {
+      const rest = raw.slice(i);
+      if ((m = rest.match(/^!\[\[[^\]]*\]\]|^!\[[^\]]*\]\([^)]*\)/))) { i += m[0].length; continue; }   // embeds show no text
+      if ((m = rest.match(/^\[\[([^\]|#]*)(#[^\]|]*)?(\|([^\]]*))?\]\]/))) {
+        if (m[3]) keep(i + 2 + m[1].length + (m[2] || '').length + 1, i + m[0].length - 2); else keep(i + 2, i + 2 + m[1].length);
+        i += m[0].length; continue;
+      }
+      if ((m = rest.match(/^\[([^\]]*)\]\([^)]*\)/))) { keep(i + 1, i + 1 + m[1].length); i += m[0].length; continue; }
+      if ((m = rest.match(/^(\*\*|__|~~|==|\*|`)/))) { i += m[0].length; continue; }
+      if (rest[0] === '\\' && rest.length > 1) { vis.push(i + 1); i += 2; continue; }
+      vis.push(i); i++;
+    }
+    return vis;
+  }
   // where in the block's markdown a click on its rendered text lands
   function lvClickOffset(d, e, raw) {
     const r = document.caretRangeFromPoint && document.caretRangeFromPoint(e.clientX, e.clientY);
     if (!r || !d.contains(r.startContainer)) return raw.length;
     const pre = document.createRange(); pre.setStart(d, 0); pre.setEnd(r.startContainer, r.startOffset);
     const txt = pre.toString().replace(/[•☐☑]/g, '');
+    if (!raw.includes('\n')) {
+      const vis = lvVisible(raw), shown = vis.map(j => raw[j]).join('');
+      if (shown.startsWith(txt)) return txt.length < vis.length ? vis[txt.length] : raw.length;
+    }
+    // fallback (multi-line blocks, or text the renderer adds): match the rendered characters in order
     let j = 0;
     for (const c of txt) {
       while (j < raw.length && raw[j] !== c && !(/\s/.test(c) && /\s/.test(raw[j]))) j++;
@@ -1331,7 +1395,7 @@ if (LIVE) {
       }
       await reload();   // so the new files resolve
       if (LV.on && t !== srcTA) {
-        const st = lvStart(LV.act), v = t.value, pad = s > 0 && v[s - 1] !== '\n' ? '\n' : '';
+        const st = lvStart(LV.act), v = t.value, pad = s > 0 && !/\s$/.test(v.slice(0, s)) ? '\n' : '';
         const all = srcTA.value;
         lvSet(all.slice(0, st) + v.slice(0, s) + pad + text + v.slice(e) + all.slice(st + v.length), st + s + pad.length + text.length);
       } else {
