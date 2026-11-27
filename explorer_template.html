@@ -122,8 +122,20 @@ td.n{text-align:right;font-variant-numeric:tabular-nums}
 .body hr{border:0;border-top:1px solid var(--line);margin:1.6em 0}
 .body .li{margin:3px 0}.body .li b.m{display:inline-block;width:1.5em;color:var(--acc);font-weight:600}
 .body img{max-width:100%;height:auto;border-radius:var(--r);box-shadow:var(--shadow)}.body audio,.body video{max-width:100%;border-radius:var(--r)}
-.mmd{margin:16px 0;padding:14px;background:var(--panel);border:1px solid var(--line);border-radius:var(--r);overflow:auto;text-align:center}
-.mmd svg{max-width:100%;height:auto;display:inline-block;vertical-align:middle}
+.mmd{position:relative;margin:16px 0;padding:14px;background:var(--panel);border:1px solid var(--line);border-radius:var(--r);overflow:auto;text-align:center}
+.mmd svg{width:min(100%,calc(var(--mw,9999px)*1.6));max-height:80vh;height:auto;display:inline-block;vertical-align:middle}
+.mmd-x{position:absolute;top:6px;right:6px;z-index:1;width:28px;height:28px;border-radius:8px;border:1px solid var(--line);background:var(--bg);color:var(--fg);cursor:zoom-in;font-size:15px;line-height:1;opacity:.55;transition:opacity .15s}
+.mmd:hover .mmd-x,.mmd-x:focus{opacity:1}
+.lv-pv .mmd-x,.sl-card .mmd-x{display:none}
+#mmdView{position:fixed;inset:0;z-index:60;display:none;background:var(--bg);color:var(--fg)}
+#mmdView.open{display:block}
+#mmdView .mv-stage{position:absolute;inset:0;overflow:hidden;cursor:grab;touch-action:none}
+#mmdView .mv-stage.drag{cursor:grabbing}
+#mmdView .mv-stage svg{position:absolute;left:0;top:0;transform-origin:0 0;max-width:none;max-height:none}
+#mmdView .mv-hud{position:absolute;left:50%;bottom:20px;transform:translateX(-50%);display:flex;align-items:center;gap:6px;padding:6px 10px;border-radius:999px;background:var(--side);backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px);border:1px solid var(--line);box-shadow:var(--shadow);font-size:13px}
+#mmdView .mv-hud button{min-width:32px;height:30px;border-radius:999px;border:0;background:transparent;color:var(--fg);cursor:pointer;font-size:14px;padding:0 8px}
+#mmdView .mv-hud button:hover{background:var(--panel)}
+#mmdView .mv-pct{min-width:48px;text-align:center;color:var(--dim);font-variant-numeric:tabular-nums}
 .math-blk{margin:14px 0;padding:12px 16px;background:var(--panel);border:1px solid var(--line);border-radius:var(--r);overflow-x:auto;text-align:center}
 math{font-size:1.05em}.math-blk math{font-size:1.22em}
 .lv-pv{margin-top:8px;padding:10px 14px;background:var(--panel);border:1px solid var(--line);border-radius:var(--r);overflow:auto}
@@ -288,6 +300,18 @@ body.obs{--bg:var(--background-primary);--bgs:var(--background-primary);--side:v
     <button id="slClose" title="Exit slides (Esc)">&#10005;</button>
   </div>
   <div class="sl-bar"><i id="slBar"></i></div>
+</div>
+<div id="mmdView" role="dialog" aria-label="Diagram viewer" aria-hidden="true">
+  <div class="mv-stage" id="mvStage"></div>
+  <div class="mv-hud">
+    <button data-mv="out" title="Zoom out (-)">&minus;</button>
+    <span class="mv-pct" id="mvPct">100%</span>
+    <button data-mv="in" title="Zoom in (+)">+</button>
+    <button data-mv="fit" title="Fit to screen (0)">Fit</button>
+    <button data-mv="width" title="Fit to screen width (W)">&#8596;</button>
+    <button data-mv="1" title="Actual size (1)">1:1</button>
+    <button data-mv="close" title="Close (Esc)">&#10005;</button>
+  </div>
 </div>
 <script>window.LIVE=/*__LIVE__*/false;window.OBS=/*__OBS__*/null;window.NATIVE=/*__NATIVE__*/false;</script>
 <script type="application/json" id="data">/*__DATA__*/</script>
@@ -627,7 +651,8 @@ function renderMermaid(src) {
     return null;
   } catch (e) { return null; }
 }
-const mmdClean = s => String(s || '').trim().replace(/^"(.*)"$/, '$1').replace(/<br\s*\/?>/gi, '\n');
+const mmdClean = s => String(s || '').trim().replace(/^"([\s\S]*)"$/, '$1').replace(/<br\s*\/?>/gi, '\n')
+  .replace(/\[\[([^\]|#]*)(?:#[^\]|]*)?\|([^\]]*)\]\]/g, '$2').replace(/\[\[([^\]|#]*)(?:#[^\]|]*)?\]\]/g, '$1');
 const mmdColor = s => /^[#a-zA-Z0-9(),.% -]{1,40}$/.test(s) ? s : '';
 const mmdLines = s => mmdClean(s).split('\n');
 const mmdTextW = (s, cw = 8) => Math.max(...mmdLines(s).map(l => l.length), 1) * cw;
@@ -638,7 +663,7 @@ function mmdTspans(x, y, lines, lh = 16, fill = 'var(--fg)', extra = '') {
 }
 function mmdSvg(w, h, mid, body) {
   const mw = Math.max(120, Math.ceil(w)), mh = Math.max(60, Math.ceil(h));
-  return `<svg viewBox="0 0 ${mw} ${mh}" width="${mw}" height="${mh}" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Mermaid diagram">` +
+  return `<svg viewBox="0 0 ${mw} ${mh}" width="${mw}" height="${mh}" style="--mw:${mw}px" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Mermaid diagram">` +
     `<defs>` +
     `<marker id="${mid}a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 1.5L9.5 5L0 8.5z" fill="var(--dim)"/></marker>` +
     `<marker id="${mid}o" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="7" markerHeight="7" orient="auto"><circle cx="5" cy="5" r="3.5" fill="var(--bgs)" stroke="var(--dim)" stroke-width="1.6"/></marker>` +
@@ -879,7 +904,9 @@ function mmdFlow(rawLines) {
     const im = s.match(/^([A-Za-z0-9_.-]+)(.*)$/); if (!im) return null;
     const id = im[1], rest = im[2].trim();
     let label = null, shape = null;
-    for (const [re, sh] of SHAPES) { const m = rest.match(re); if (m) { label = mmdClean(m[1]); shape = sh; break; } }
+    // quoted labels first, so brackets inside quotes (e.g. A["[[Note]]"]) don't end the shape early
+    for (const [re, sh] of SHAPES) { const m = rest.match(new RegExp(re.source.replace('([\\s\\S]*?)', '\\s*"([\\s\\S]*?)"\\s*'))); if (m) { label = mmdClean(m[1]); shape = sh; break; } }
+    if (shape === null) for (const [re, sh] of SHAPES) { const m = rest.match(re); if (m) { label = mmdClean(m[1]); shape = sh; break; } }
     if (!nodes.has(id)) nodes.set(id, { id, label: label ?? id, shape: shape || 'rect', cls });
     else { const n = nodes.get(id); if (label !== null) n.label = label; if (shape) n.shape = shape; if (cls) n.cls = cls; }
     for (const sg of sgStack) if (!sg.ids.includes(id)) sg.ids.push(id);
@@ -1180,7 +1207,7 @@ function md(src, id, depth = 0) {
     if ((m = ln.match(/^\u0002(\d+)\u0002$/))) {
       flush(); const b = blocks[+m[1]];
       const svg = b.lang === 'mermaid' ? renderMermaid(b.code) : null;
-      out.push(svg ? `<div class="mmd">${svg}</div>` : '<pre><code>' + esc(b.code) + '</code></pre>');
+      out.push(svg ? `<div class="mmd"><button class="mmd-x" type="button" title="Expand diagram (zoom &amp; pan)">&#9974;</button>${svg}</div>` : '<pre><code>' + esc(b.code) + '</code></pre>');
       i++; continue;
     }
     if ((m = ln.match(/^\u0003(\d+)\u0003$/))) {
@@ -2165,7 +2192,7 @@ if (LIVE) {
     return j;
   }
   live.addEventListener('mousedown', e => {
-    if (e.button !== 0) return;
+    if (e.button !== 0 || e.target.closest('.mmd-x')) return;
     const d = e.target.closest('.lv-b');
     if (!d) { if (e.target === live) { e.preventDefault(); const all = srcTA.value; if (all && !all.endsWith('\n') && LV.blocks[LV.blocks.length - 1].trim()) lvSet(all + '\n', all.length + 1); else lvRender(all.length); } return; }
     if (d.classList.contains('on')) return;
@@ -2299,6 +2326,84 @@ document.addEventListener('keydown', e => {
     e.preventDefault(); openSlides(curNote);
   }
 });
+
+/* ---------- diagram viewer: expand a Mermaid diagram to the whole screen with zoom & pan ---------- */
+const MV = { open: false, svg: null, w: 0, h: 0, s: 1, x: 0, y: 0 };
+function mvApply() {
+  if (!MV.svg) return;
+  MV.svg.style.transform = `translate(${MV.x}px,${MV.y}px) scale(${MV.s})`;
+  $('#mvPct').textContent = Math.round(MV.s * 100) + '%';
+}
+function mvFit(mode) {
+  const st = $('#mvStage'), W = st.clientWidth, H = st.clientHeight, pad = 32, bottom = 72;
+  const sw = (W - pad * 2) / MV.w, sh = (H - pad - bottom) / MV.h;
+  MV.s = mode === 'width' ? sw : mode === 1 ? 1 : Math.min(sw, sh);
+  MV.x = (W - MV.w * MV.s) / 2;
+  MV.y = mode === 'width' && MV.h * MV.s > H - pad - bottom ? pad : Math.max(pad, (H - bottom - MV.h * MV.s) / 2);
+  mvApply();
+}
+function mvZoom(f, cx, cy) {
+  const st = $('#mvStage');
+  if (cx === undefined) { cx = st.clientWidth / 2; cy = st.clientHeight / 2; }
+  const ns = Math.min(40, Math.max(0.05, MV.s * f));
+  MV.x = cx - (cx - MV.x) * (ns / MV.s); MV.y = cy - (cy - MV.y) * (ns / MV.s); MV.s = ns;
+  mvApply();
+}
+function mvOpen(src) {
+  const vb = (src.getAttribute('viewBox') || '').split(/\s+/).map(Number);
+  MV.w = vb[2] || src.width.baseVal.value; MV.h = vb[3] || src.height.baseVal.value;
+  const svg = src.cloneNode(true);
+  svg.removeAttribute('style'); svg.setAttribute('width', MV.w); svg.setAttribute('height', MV.h);
+  const st = $('#mvStage'); st.textContent = ''; st.appendChild(svg); MV.svg = svg;
+  $('#mmdView').classList.add('open'); $('#mmdView').setAttribute('aria-hidden', 'false'); MV.open = true;
+  mvFit('fit');
+}
+function mvClose() {
+  MV.open = false; MV.svg = null; $('#mvStage').textContent = '';
+  $('#mmdView').classList.remove('open'); $('#mmdView').setAttribute('aria-hidden', 'true');
+}
+document.addEventListener('click', e => {
+  const b = e.target.closest('.mmd-x'); if (!b) return;
+  e.preventDefault(); e.stopPropagation();
+  const svg = b.parentElement.querySelector('svg'); if (svg) mvOpen(svg);
+});
+document.addEventListener('dblclick', e => {
+  if (MV.open || e.target.closest('#live, .lv-pv, #slides')) return;
+  const d = e.target.closest('.mmd'); const svg = d && d.querySelector('svg');
+  if (svg) { e.preventDefault(); mvOpen(svg); }
+});
+$('#mmdView .mv-hud').addEventListener('click', e => {
+  const b = e.target.closest('button'); if (!b) return;
+  const a = b.dataset.mv;
+  if (a === 'close') mvClose(); else if (a === 'in') mvZoom(1.25); else if (a === 'out') mvZoom(0.8);
+  else mvFit(a === '1' ? 1 : a);
+});
+{
+  const st = $('#mvStage'); let drag = null;
+  st.addEventListener('wheel', e => {
+    e.preventDefault(); const r = st.getBoundingClientRect();
+    mvZoom(Math.exp(-e.deltaY * (e.deltaMode === 1 ? 0.05 : 0.0018)), e.clientX - r.left, e.clientY - r.top);
+  }, { passive: false });
+  st.addEventListener('pointerdown', e => { if (e.button !== 0) return; drag = { px: e.clientX, py: e.clientY, x: MV.x, y: MV.y }; st.setPointerCapture(e.pointerId); st.classList.add('drag'); });
+  st.addEventListener('pointermove', e => { if (!drag) return; MV.x = drag.x + e.clientX - drag.px; MV.y = drag.y + e.clientY - drag.py; mvApply(); });
+  const end = () => { drag = null; st.classList.remove('drag'); };
+  st.addEventListener('pointerup', end); st.addEventListener('pointercancel', end);
+  st.addEventListener('dblclick', e => { const r = st.getBoundingClientRect(); mvZoom(2, e.clientX - r.left, e.clientY - r.top); });
+  window.addEventListener('resize', () => { if (MV.open) mvFit('fit'); });
+}
+window.addEventListener('keydown', e => {
+  if (!MV.open) return;
+  const k = e.key;
+  if (k === 'Escape') mvClose();
+  else if (k === '+' || k === '=') mvZoom(1.25);
+  else if (k === '-' || k === '_') mvZoom(0.8);
+  else if (k === '0') mvFit('fit');
+  else if (k === '1') mvFit(1);
+  else if (k.toLowerCase() === 'w') mvFit('width');
+  else if (k.startsWith('Arrow')) { const d = 60; if (k === 'ArrowLeft') MV.x += d; if (k === 'ArrowRight') MV.x -= d; if (k === 'ArrowUp') MV.y += d; if (k === 'ArrowDown') MV.y -= d; mvApply(); }
+  else return;
+  e.preventDefault(); e.stopImmediatePropagation();
+}, true);
 
 /* ---------- focus mode: Ctrl+F shows the current note full screen, again restores the columns ---------- */
 function setFocus(on) {

@@ -73,6 +73,35 @@ test('Mermaid diagrams render as SVG across diagram types and fall back safely',
   await expect(page.locator('#noteBody pre code')).toContainText('unsupportedDiagramType');
 });
 
+test('Mermaid diagram expands to a full-screen zoom & pan viewer; quoted wikilink labels render whole', async ({ page, request }) => {
+  await createNote(request, 'E2E/mmd-view', '```mermaid\nflowchart LR\n  A["[[CraftStorm]]"] --> B["[[Note|Alias]] (9203)"]\n```');
+  await page.goto('/#n/' + encodeURIComponent('E2E/mmd-view'));
+  const mmd = page.locator('#noteBody .mmd');
+  await expect(mmd.locator('svg')).toBeVisible();
+  await expect(mmd).toContainText('CraftStorm');
+  await expect(mmd).toContainText('Alias (9203)');
+  await expect(mmd).not.toContainText('[[');
+  await mmd.hover();
+  await mmd.locator('.mmd-x').click();
+  const view = page.locator('#mmdView');
+  await expect(view).toBeVisible();
+  const svg = view.locator('svg');
+  await expect(svg).toBeVisible();
+  const vp = page.viewportSize();
+  const fit = await svg.boundingBox();
+  // fitted to the screen: far larger than the inline rendering, and filling the width or height
+  expect(Math.max(fit.width / vp.width, fit.height / vp.height)).toBeGreaterThan(0.6);
+  await expect(page.locator('#mvPct')).not.toHaveText('100%');
+  await page.keyboard.press('+');
+  const zoomed = await svg.boundingBox();
+  expect(zoomed.width).toBeGreaterThan(fit.width * 1.1);
+  await page.keyboard.press('1');
+  await expect(page.locator('#mvPct')).toHaveText('100%');
+  await page.keyboard.press('Escape');
+  await expect(view).toBeHidden();
+  await expect(page.locator('#noteBody .mmd svg')).toBeVisible();
+});
+
 test('Mermaid live editor previews changes as you type and inserts from toolbar', async ({ page, request }) => {
   await createNote(request, 'E2E/mmd-edit', '```mermaid\nflowchart LR\n  A[Alpha] --> B[Beta]\n```');
   await page.goto('/#e/' + encodeURIComponent('E2E/mmd-edit'));
