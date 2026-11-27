@@ -1,5 +1,6 @@
 //! Command line: the app window by default, or --serve / -o FILE / --mcp.
 mod gui;
+mod icon;
 
 use fastobsidian::server::{expand_path, Options, Server};
 use fastobsidian::{mcp, page};
